@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+.env
+artifacts/
+models/*.pkl
+experiment*.json
+router_*.jsonl
+data/arvo/*
+!data/arvo/README.md
