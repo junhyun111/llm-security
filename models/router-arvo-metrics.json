@@ -1,0 +1,17 @@
+{
+  "model": "C:\\Users\\junhyun111\\Desktop\\llm-security\\models\\router-arvo.pkl",
+  "dev": {
+    "micro_f1": 0.27486910994764396,
+    "macro_f1": 0.2516324821275717,
+    "coverage_at_1": 0.27486910994764396,
+    "coverage_at_2": 0.6151832460732984,
+    "sample_count": 382
+  },
+  "test": {
+    "micro_f1": 0.2627118644067797,
+    "macro_f1": 0.2496884033984332,
+    "coverage_at_1": 0.2627118644067797,
+    "coverage_at_2": 0.6038135593220338,
+    "sample_count": 472
+  }
+}

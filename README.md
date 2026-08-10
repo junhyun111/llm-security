@@ -3,7 +3,9 @@
 C/C++ 오픈소스에서 정적 분석으로 취약 후보 함수를 찾고, 학습된 Router가 후보별 Expert를 선택한 뒤 OpenRouter LLM으로 분석하는 실험용 파이프라인입니다.
 
 - 구현 코드: `src/llm_security/*.py`
-- ARVO 학습·평가 노트북: `notebooks/01_model_experiments.ipynb`
+- Router 학습: `notebooks/01_train_router.ipynb`
+- Router 평가: `notebooks/02_evaluate_router.ipynb`
+- OpenRouter 에이전트 실행: `notebooks/03_run_agents.ipynb`
 - 모델 및 실행 설정: `.env`
 
 ## 설치
@@ -72,11 +74,17 @@ python -m llm_security.cli split-arvo `
 
 ## Router 학습과 평가
 
+세 노트북은 역할별로 독립되어 있으며 아래 순서로 실행합니다.
+
 ```powershell
-python -m jupyter lab notebooks\01_model_experiments.ipynb
+python -m jupyter lab
 ```
 
-노트북은 합성 데이터를 사용하지 않습니다. ARVO train만 학습하고 dev와 test를 따로 평가한 뒤 `models/router-arvo.pkl`을 저장합니다. OpenRouter LLM 자체를 fine-tuning하는 것이 아니라 조건부 Expert Router를 학습합니다.
+1. `01_train_router.ipynb`: ARVO train만 사용해 학습하고 `models/router-arvo.pkl` 저장
+2. `02_evaluate_router.ipynb`: 저장된 Router를 dev/test에서 평가하고 `models/router-arvo-metrics.json` 저장
+3. `03_run_agents.ipynb`: Router와 OpenRouter LLM 에이전트로 실제 benchmark 실행
+
+앞의 두 노트북은 OpenRouter API를 사용하지 않습니다. 세 번째 노트북만 `.env`의 API key와 `RUN_PAID_EXPERIMENTS=1`이 필요합니다. OpenRouter LLM 자체를 fine-tuning하는 것이 아니라 조건부 Expert Router를 학습합니다.
 
 CLI로 학습하려면 다음을 실행합니다. 최종 성능 확인 전에는 `--test`에 dev 파일을 사용하는 것을 권장합니다.
 
