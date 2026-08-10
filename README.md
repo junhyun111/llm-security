@@ -122,6 +122,19 @@ USE_RULE_FALLBACK=true
 
 Router 모델은 학습 데이터에 존재하는 Expert family만 class로 학습합니다. 학습되지 않은 Integer·Taint·Concurrency family는 별도 rule-trigger 점수로 보조하며, 결과 JSON에는 learned score와 trigger score가 구분되어 기록됩니다.
 
+## Static analysis frontend
+
+Phase 2A의 Tree-sitter frontend는 C/C++ 소스를 재사용 가능한 IR로 변환합니다.
+
+```text
+source files
+→ TreeSitterFrontend
+→ FunctionIR (parameters, calls, assignments, conditions, memory accesses, returns)
+→ ProgramIR (1-hop direct callers/callees)
+```
+
+구현은 `src/llm_security/analysis/ir.py`와 `analysis/frontend.py`에 있습니다. 기존 regex 기반 analyzer는 `analysis/legacy.py`의 `LegacyRegexAnalyzer`로 보존되어 있으며, Phase 2A에서는 production pipeline 동작을 바꾸지 않습니다. CFG·def-use·semantic fact·Candidate Gate 연결은 다음 Phase 범위입니다.
+
 ## 실제 프로젝트 분석
 
 ```powershell
