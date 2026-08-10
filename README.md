@@ -176,11 +176,11 @@ StructuralAnalyzer → SemanticAnalyzer
 
 ```dotenv
 ANALYSIS_BACKEND=legacy
-CANDIDATE_GATE_ENABLED=true
+CANDIDATE_GATE_ENABLED=false
 CANDIDATE_GATE_THRESHOLD=0.40
 ```
 
-기본값은 아직 `legacy`입니다. 기존 Router와 semantic Candidate를 섞지 않도록 Candidate와 Router가 `legacy-v1` 또는 `semantic-v1` feature schema를 기록하고, schema가 다르면 inference를 중단합니다. Router artifact format은 v3이며 기존 artifact는 재학습 후 사용해야 합니다. Semantic Router 데이터 재생성과 Gate threshold calibration은 다음 실험 단계의 범위입니다.
+기본값은 아직 `legacy`입니다. 기존 Router와 semantic Candidate를 섞지 않도록 Candidate와 Router가 `legacy-v1` 또는 `semantic-v1` feature schema를 기록하고, schema가 다르면 inference를 중단합니다. Router artifact format은 v4이며 기존 artifact는 재학습 후 사용해야 합니다. Semantic Router 데이터 재생성과 Gate threshold calibration은 Phase 2E에서 수행합니다.
 
 ## 실제 프로젝트 분석
 
@@ -207,5 +207,23 @@ python -m llm_security.cli run-cases data\arvo\cases_test.jsonl `
 ```powershell
 pytest
 ```
+
+## Phase 2E offline experiment
+
+ARVO case 전체를 고정된 project-disjoint split으로 나누고 Legacy/Semantic
+analyzer, Candidate Gate, Softmax Router, Adaptive Top-K 및 rule fallback을 같은
+조건에서 비교합니다. 이 명령은 OpenRouter 또는 다른 LLM API를 호출하지 않습니다.
+
+```powershell
+python -m llm_security.cli phase2e `
+  --cases data\arvo\cases_all.jsonl `
+  --data-dir data\phase2e `
+  --artifacts-dir artifacts\phase2e `
+  --output results\phase2e `
+  --seed 2026
+```
+
+분할과 backend별 Router JSONL은 `data/phase2e`, 학습된 Router는
+`artifacts/phase2e`, 평가 결과는 `results/phase2e`에 저장됩니다.
 
 함수 경계는 Tree-sitter C/C++ AST로 추출합니다. 현재 Router 특징은 portable 정적 신호이며, 이후 Clang·CodeQL·Joern adapter가 동일한 `Candidate`와 `Evidence` schema를 출력하도록 확장할 수 있습니다.

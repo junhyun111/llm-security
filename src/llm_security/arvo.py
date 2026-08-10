@@ -157,7 +157,7 @@ def prepare_arvo_cases(
     balanced: bool = True,
     seed: int = 2026,
     cache_directory: str | Path = "data/arvo/cache/github",
-    require_routable: bool = True,
+    require_routable: bool = False,
     resume: bool = False,
     failure_log: str | Path | None = None,
     checkpoint_every: int = 25,

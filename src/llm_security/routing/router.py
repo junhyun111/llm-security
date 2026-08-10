@@ -44,8 +44,16 @@ class PolicyCalibration:
 class RuleTriggerFallback:
     """Rule assistance for Expert families absent from Router training data."""
 
-    def __init__(self, *, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        enabled: bool = True,
+        mode: str = "score_fusion",
+    ) -> None:
+        if mode not in {"score_fusion", "forced_trigger"}:
+            raise ValueError("Fallback mode must be score_fusion or forced_trigger")
         self.enabled = enabled
+        self.mode = mode
 
     def score(
         self,
@@ -114,7 +122,7 @@ class RuleTriggerFallback:
 
 
 class AdaptiveExpertRouter:
-    artifact_version = 3
+    artifact_version = 4
 
     def __init__(
         self,
@@ -183,14 +191,35 @@ class AdaptiveExpertRouter:
             else combined
         )
         selection = self.policy.decide(scores)
+        selected = selection.selected
+        forced_reasons: list[str] = []
+        if self.triggers.mode == "forced_trigger" and trigger_scores:
+            triggered = min(
+                trigger_scores,
+                key=lambda family: (
+                    -trigger_scores[family],
+                    _TRIGGER_PRIORITY[family],
+                    family.value,
+                ),
+            )
+            learned_top1 = min(
+                learned_scores,
+                key=lambda family: (-learned_scores[family], family.value),
+            )
+            selected = [triggered]
+            if learned_top1 != triggered and self.policy.config.max_experts > 1:
+                selected.append(learned_top1)
+            forced_reasons.append(
+                f"forced trigger selected unlearned family: {triggered.value}"
+            )
         return RouteDecision(
             candidate_id=candidate.candidate_id,
             scores=scores,
-            selected=selection.selected,
+            selected=selected,
             top1_confidence=selection.top1_confidence,
             top1_top2_margin=selection.top1_top2_margin,
             policy=self.policy.name,
-            reasons=selection.reasons + trigger_reasons,
+            reasons=selection.reasons + trigger_reasons + forced_reasons,
             available_families=sorted(scores, key=lambda family: family.value),
             learned_scores=learned_scores,
             trigger_scores=trigger_scores,
@@ -326,6 +355,13 @@ def _single_label(sample: RouterSample) -> ExpertFamily:
             f"Multiclass routing requires exactly one label for {sample.candidate.candidate_id}"
         )
     return sample.labels[0]
+
+
+_TRIGGER_PRIORITY = {
+    ExpertFamily.INTEGER_SIZE_TYPE: 0,
+    ExpertFamily.TAINT_API_CONTRACT: 1,
+    ExpertFamily.CONCURRENCY_TOCTOU: 2,
+}
 
 
 def _expected_calibration_error(

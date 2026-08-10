@@ -39,7 +39,7 @@ class RouterConfig:
 
 @dataclass(slots=True)
 class CandidateGateConfig:
-    enabled: bool = True
+    enabled: bool = False
     threshold: float = 0.40
 
 
@@ -124,7 +124,7 @@ class AppConfig:
                 ),
             ),
             candidate_gate=CandidateGateConfig(
-                enabled=_as_bool(values.get("CANDIDATE_GATE_ENABLED", "true")),
+                enabled=_as_bool(values.get("CANDIDATE_GATE_ENABLED", "false")),
                 threshold=float(values.get("CANDIDATE_GATE_THRESHOLD", "0.40"))
             ),
             analysis=AnalysisConfig(

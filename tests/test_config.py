@@ -70,3 +70,9 @@ def test_analysis_backend_and_gate_are_loaded_from_env(tmp_path) -> None:
     assert config.analysis.backend == "semantic"
     assert config.candidate_gate.enabled is False
     assert config.candidate_gate.threshold == 0.25
+
+
+def test_candidate_gate_is_off_by_default(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("CANDIDATE_GATE_ENABLED", raising=False)
+    config = AppConfig.from_env(tmp_path / "missing.env")
+    assert config.candidate_gate.enabled is False

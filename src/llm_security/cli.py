@@ -9,6 +9,7 @@ from .arvo import prepare_arvo_cases, prepare_arvo_training_dataset
 from .config import AppConfig
 from .datasets import load_cases_jsonl, load_router_samples_jsonl, write_cases_jsonl
 from .experiment import ExperimentRunner
+from .experiments import Phase2EConfig, run_phase2e
 from .factory import build_pipeline
 from .models import ProjectCase, to_dict
 from .routing import AdaptiveExpertRouter, RoutingPolicyConfig
@@ -91,6 +92,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     split_arvo_parser.add_argument("--dataset-dir", default="data/arvo")
     split_arvo_parser.add_argument("--seed", type=int, default=2026)
+
+    phase2e_parser = subparsers.add_parser(
+        "phase2e",
+        help="Run offline ARVO calibration and routing ablations (no LLM calls)",
+    )
+    phase2e_parser.add_argument(
+        "--cases", default="data/arvo/cases_all.jsonl"
+    )
+    phase2e_parser.add_argument("--data-dir", default="data/phase2e")
+    phase2e_parser.add_argument("--artifacts-dir", default="artifacts/phase2e")
+    phase2e_parser.add_argument("--output", default="results/phase2e")
+    phase2e_parser.add_argument("--seed", type=int, default=2026)
+    phase2e_parser.add_argument("--target-gate-retention", type=float, default=0.98)
+    phase2e_parser.add_argument("--target-routing-coverage", type=float, default=0.95)
     return parser
 
 
@@ -169,7 +184,9 @@ def main(argv: list[str] | None = None) -> int:
             unique_projects=False if args.all else args.unique_projects,
             balanced=False if args.all else not args.no_balance,
             seed=args.seed,
-            require_routable=False if args.all else True,
+            # Benchmark cases must not disappear merely because the analyzer
+            # missed their ground-truth location.
+            require_routable=False,
             # Full collection is intentionally resumable by default so an
             # existing partial dataset is never discarded on a transient
             # GitHub failure.
@@ -197,6 +214,23 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"Split {len(cases)} ARVO cases into {args.dataset_dir}")
         print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "phase2e":
+        cases = load_cases_jsonl(args.cases)
+        result = run_phase2e(
+            cases,
+            config=Phase2EConfig(
+                seed=args.seed,
+                target_gate_retention=args.target_gate_retention,
+                target_routing_coverage=args.target_routing_coverage,
+                data_directory=args.data_dir,
+                artifact_directory=args.artifacts_dir,
+                output_directory=args.output,
+            ),
+            progress=print,
+        )
+        print(f"Phase 2E results saved to {args.output}")
+        print(json.dumps(result["manifest"], ensure_ascii=False, indent=2))
         return 0
     return 1
 

@@ -166,7 +166,7 @@ def test_semantic_rule_fallback_triggers_integer_taint_and_toctou() -> None:
 def test_old_router_artifact_version_is_rejected(tmp_path) -> None:
     train, _ = router_samples()
     router = AdaptiveExpertRouter.fit(train, use_rule_fallback=False)
-    router._artifact_version = 2
+    router._artifact_version = 3
     artifact = tmp_path / "old-router.pkl"
     router.save(artifact)
 
