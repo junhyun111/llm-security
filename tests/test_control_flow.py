@@ -149,3 +149,23 @@ def test_statement_after_unconditional_return_is_not_added_as_reachable() -> Non
 
     assert not any("unreachable_call" in node.text for node in cfg.nodes.values())
     assert any(warning.startswith("unreachable StatementIR") for warning in cfg.warnings)
+
+
+def test_statically_true_loops_have_no_false_exit() -> None:
+    sources = [
+        "void f(void) { while (1) tick(); after(); }",
+        "void f(void) { while (true) tick(); after(); }",
+        "void f(void) { for (;;) tick(); after(); }",
+    ]
+
+    for source in sources:
+        _, cfg = _build(source)
+        condition = next(
+            node for node in cfg.nodes.values() if node.kind == "condition"
+        )
+        assert not any(
+            edge_kind == "false"
+            for (source_id, _), edge_kind in cfg.edge_kinds.items()
+            if source_id == condition.node_id
+        )
+        assert not any("after()" in node.text for node in cfg.nodes.values())

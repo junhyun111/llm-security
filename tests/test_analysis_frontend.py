@@ -26,6 +26,8 @@ void parse(char *buf, size_t len) {
     assert assignments["n"].expression == "len * 4"
     assert assignments["n"].defs == {"n"}
     assert assignments["n"].uses == {"len"}
+    assert assignments["n"].expression_info is not None
+    assert assignments["n"].expression_info.operators == {"*"}
     assert assignments["*dst"].expression == "malloc(n)"
 
     calls = {item.callee: item for item in function.calls}

@@ -162,12 +162,7 @@ class ControlFlowBuilder:
             for source, _ in body_pending:
                 self._add_edge(source, control.condition_id, "loop_back")
         condition = self._conditions.get(control.condition_id)
-        if (
-            control.kind == "for"
-            and condition is not None
-            and condition.expression == "true"
-            and not condition.symbols
-        ):
+        if condition is not None and is_statically_true_condition(condition):
             return []
         return [(control.condition_id, "false")]
 
@@ -267,6 +262,10 @@ def dominates(
     dominators: dict[str, set[str]], dominator: str, node: str
 ) -> bool:
     return dominator in dominators.get(node, set())
+
+
+def is_statically_true_condition(condition: Condition) -> bool:
+    return condition.expression.strip().lower() in {"1", "true"}
 
 
 def _synthetic_id(prefix: str, function: FunctionIR) -> str:

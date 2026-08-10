@@ -13,6 +13,15 @@ class SourceSpan:
 
 
 @dataclass(slots=True)
+class ExpressionInfo:
+    text: str
+    symbols: set[str]
+    operators: set[str]
+    cast_types: list[str]
+    has_sizeof: bool = False
+
+
+@dataclass(slots=True)
 class CallSite:
     call_id: str
     callee: str
@@ -21,6 +30,7 @@ class CallSite:
     span: SourceSpan
     text: str
     argument_symbols: list[set[str]] = field(default_factory=list)
+    argument_info: list[ExpressionInfo] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -32,6 +42,7 @@ class Assignment:
     uses: set[str]
     span: SourceSpan
     text: str
+    expression_info: ExpressionInfo | None = None
 
 
 @dataclass(slots=True)
@@ -52,6 +63,8 @@ class MemoryAccess:
     kind: str
     span: SourceSpan
     text: str
+    base_symbols: set[str] = field(default_factory=set)
+    index_symbols: set[str] = field(default_factory=set)
 
 
 @dataclass(slots=True)

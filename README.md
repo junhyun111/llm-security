@@ -146,6 +146,21 @@ FunctionIR
 
 구현은 `src/llm_security/analysis/`에 있습니다. 현재 지원하는 구조화 제어 흐름은 `if`, `if/else`, `while`, `for`, 중첩 제어문과 early return입니다. `switch`, `goto`, `break`, `continue`는 임의로 해석하지 않고 CFG warning으로 기록합니다. 기존 regex 기반 analyzer는 `analysis/legacy.py`의 `LegacyRegexAnalyzer`로 보존되며 production pipeline은 계속 기존 `LightweightStaticAnalyzer`를 사용합니다. vulnerability semantic fact, Candidate Gate 연결, Router feature 변경은 Phase 2B 범위에 포함되지 않습니다.
 
+## Semantic fact engine
+
+Phase 2C의 `SemanticAnalyzer`는 구조 분석 결과에 API 역할과 보안 의미를 부여합니다.
+
+```text
+ProgramAnalysis
+→ ApiCatalog
+→ control/data-flow relation
+→ SemanticFact + TaintPath
+```
+
+기본 catalog는 `malloc/calloc/realloc`, `memcpy/memmove/strncpy/strcpy`, `free`, `read/recv/fread/getenv`, 명령·파일 sink, pthread API와 TOCTOU API를 지원합니다. allocation/release, memory copy와 guard, size arithmetic/cast flow, source-to-sink, use-after-release/double-release, uninitialized use, nullable dereference, lock/thread 및 TOCTOU fact를 생성할 수 있습니다.
+
+`switch`, `goto`, `break`, `continue` 등으로 CFG warning이 있으면 local positive fact는 유지하되 `without_guard`, `unchecked`, `unsanitized` 같은 부재 기반 fact는 생성하지 않습니다. 이 계층은 아직 production factory, Candidate feature, Router 또는 LLM Agent에 연결되지 않습니다.
+
 ## 실제 프로젝트 분석
 
 ```powershell

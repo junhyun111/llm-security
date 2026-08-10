@@ -6,7 +6,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
 from .control_flow import ControlFlowGraph
-from .ir import CallSite, FunctionIR, StatementIR
+from .ir import Assignment, CallSite, FunctionIR, StatementIR
 
 
 @dataclass(slots=True, frozen=True)
@@ -62,6 +62,10 @@ class ReachingDefinitionsAnalyzer:
     ) -> DataFlowGraph:
         statements = _statement_index(function)
         calls = {call.call_id: call for call in function.calls}
+        assignments = {
+            assignment.assignment_id: assignment
+            for assignment in function.assignments
+        }
         definitions: dict[str, Definition] = {}
         generated: dict[str, set[str]] = {
             node_id: set() for node_id in cfg.nodes
@@ -87,6 +91,7 @@ class ReachingDefinitionsAnalyzer:
                     symbol=symbol,
                     statements=statements,
                     calls=calls,
+                    assignments=assignments,
                 )
                 definition = _definition(
                     symbol=symbol,
@@ -260,6 +265,7 @@ def _definition_kind(
     symbol: str,
     statements: dict[str, StatementIR],
     calls: dict[str, CallSite],
+    assignments: dict[str, Assignment],
 ) -> str:
     statement = statements.get(node_id)
     if statement is None:
@@ -269,6 +275,12 @@ def _definition_kind(
         assigned_to = call.assigned_to if call is not None else None
         if assigned_to and _last_identifier(assigned_to) == symbol:
             return "call_result"
+    if statement.kind == "declaration" and not any(
+        symbol in assignments[assignment_id].defs
+        for assignment_id in statement.assignment_ids
+        if assignment_id in assignments
+    ):
+        return "uninitialized"
     return "assignment"
 
 

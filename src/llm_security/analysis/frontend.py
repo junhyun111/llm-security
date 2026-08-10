@@ -15,6 +15,7 @@ from .ir import (
     CallSite,
     Condition,
     ControlRegion,
+    ExpressionInfo,
     FunctionIR,
     MemoryAccess,
     ProgramIR,
@@ -32,6 +33,7 @@ _IDENTIFIER_TYPES = {
     "type_identifier",
 }
 _COMPARISON_OPERATORS = {"<", "<=", ">", ">=", "==", "!="}
+_ARITHMETIC_OPERATORS = {"+", "-", "*", "/", "%", "<<", ">>"}
 _CONTROL_TYPES = {"if_statement", "while_statement", "for_statement"}
 _STATEMENT_TYPES = {"declaration", "expression_statement", "return_statement"}
 _UNSUPPORTED_CONTROL_TYPES = {
@@ -293,6 +295,31 @@ def _expression_symbols(node: Node | None, source: bytes) -> set[str]:
         for child in node.named_children
         for symbol in _expression_symbols(child, source)
     }
+
+
+def _expression_info(node: Node | None, source: bytes) -> ExpressionInfo:
+    if node is None:
+        return ExpressionInfo("", set(), set(), [], False)
+    cast_types = [
+        _text(type_node, source).strip()
+        for item in _walk(node)
+        if item.type == "cast_expression"
+        for type_node in [item.child_by_field_name("type")]
+        if type_node is not None
+    ]
+    operators = {
+        child.type
+        for item in _walk(node)
+        for child in item.children
+        if not child.is_named and child.type in _ARITHMETIC_OPERATORS
+    }
+    return ExpressionInfo(
+        text=_text(node, source).strip(),
+        symbols=_expression_symbols(node, source),
+        operators=operators,
+        cast_types=cast_types,
+        has_sizeof=any(item.type == "sizeof_expression" for item in _walk(node)),
+    )
 
 
 def _assignment_defined_symbol(left: Node, source: bytes) -> str | None:
@@ -583,6 +610,7 @@ def _assignment(
         uses=uses,
         span=_span(node, file),
         text=_text(node, source).strip(),
+        expression_info=_expression_info(right, source),
     )
 
 
@@ -601,11 +629,17 @@ def _call_site(
         if arguments_node is not None
         else []
     )
+    argument_info = (
+        [_expression_info(item, source) for item in arguments_node.named_children]
+        if arguments_node is not None
+        else []
+    )
     return CallSite(
         call_id=_stable_id("CALL", file, function, node),
         callee=_normalize_callee(_text(callee_node, source)),
         arguments=arguments,
         argument_symbols=argument_symbols,
+        argument_info=argument_info,
         assigned_to=_assigned_target(node, source),
         span=_span(node, file),
         text=_text(node, source).strip(),
@@ -697,6 +731,8 @@ def _memory_access(
             kind=kind,
             span=_span(node, file),
             text=_text(node, source).strip(),
+            base_symbols=_expression_symbols(base, source),
+            index_symbols=_expression_symbols(index, source),
         )
     if node.type == "pointer_expression" and _text(node, source).lstrip().startswith("*"):
         argument = node.child_by_field_name("argument") or (
@@ -709,6 +745,7 @@ def _memory_access(
             kind="dereference",
             span=_span(node, file),
             text=_text(node, source).strip(),
+            base_symbols=_expression_symbols(argument, source),
         )
     if node.type == "field_expression" and "->" in _text(node, source):
         argument = node.child_by_field_name("argument") or (
@@ -721,6 +758,7 @@ def _memory_access(
             kind="dereference",
             span=_span(node, file),
             text=_text(node, source).strip(),
+            base_symbols=_expression_symbols(argument, source),
         )
     return None
 
