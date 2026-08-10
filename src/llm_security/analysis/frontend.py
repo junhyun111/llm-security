@@ -14,10 +14,12 @@ from .ir import (
     Assignment,
     CallSite,
     Condition,
+    ControlRegion,
     FunctionIR,
     MemoryAccess,
     ProgramIR,
     SourceSpan,
+    StatementIR,
 )
 
 
@@ -30,6 +32,14 @@ _IDENTIFIER_TYPES = {
     "type_identifier",
 }
 _COMPARISON_OPERATORS = {"<", "<=", ">", ">=", "==", "!="}
+_CONTROL_TYPES = {"if_statement", "while_statement", "for_statement"}
+_STATEMENT_TYPES = {"declaration", "expression_statement", "return_statement"}
+_UNSUPPORTED_CONTROL_TYPES = {
+    "break_statement": "break",
+    "continue_statement": "continue",
+    "goto_statement": "goto",
+    "switch_statement": "switch",
+}
 _FUNCTION_NAME_RE = re.compile(
     r"(?P<name>(?:[A-Za-z_~]\w*::)*[A-Za-z_~]\w*|operator\s*[^\s(]+)\s*\("
 )
@@ -112,14 +122,45 @@ class TreeSitterFrontend:
             for item in nodes
             if item.type == "call_expression"
         ]
-        conditions = [
-            condition
+        conditions: list[Condition] = []
+        condition_by_control: dict[tuple[int, int], Condition] = {}
+        for item in nodes:
+            if item.type not in _CONTROL_TYPES:
+                continue
+            condition = _condition(item, file=file, function=name, source=source)
+            if condition is None:
+                condition = _implicit_condition(
+                    item, file=file, function=name, source=source
+                )
+            conditions.append(condition)
+            condition_by_control[(item.start_byte, item.end_byte)] = condition
+
+        assignment_by_id = {item.assignment_id: item for item in assignments}
+        call_by_id = {item.call_id: item for item in calls}
+        controls = [
+            _control_region(
+                item,
+                condition=condition_by_control[(item.start_byte, item.end_byte)],
+                file=file,
+                function=name,
+                source=source,
+                assignments=assignment_by_id,
+                calls=call_by_id,
+            )
             for item in nodes
-            if item.type in {"if_statement", "for_statement", "while_statement"}
-            for condition in [
-                _condition(item, file=file, function=name, source=source)
-            ]
-            if condition is not None
+            if item.type in _CONTROL_TYPES
+        ]
+        statements = [
+            _statement_ir(
+                item,
+                file=file,
+                function=name,
+                source=source,
+                assignments=assignment_by_id,
+                calls=call_by_id,
+            )
+            for item in nodes
+            if item.type in _STATEMENT_TYPES and not _is_for_header_component(item)
         ]
         memory_accesses = [
             access
@@ -140,17 +181,27 @@ class TreeSitterFrontend:
             line_start=node.start_point.row + 1,
             line_end=node.end_point.row + 1,
             parameters=list(dict.fromkeys(parameters)),
-            calls=sorted(calls, key=lambda item: item.span.line_start),
+            statements=sorted(statements, key=_statement_sort_key),
+            controls=sorted(controls, key=_control_sort_key),
+            calls=sorted(calls, key=lambda item: _span_sort_key(item.span)),
             assignments=sorted(
-                assignments, key=lambda item: item.span.line_start
+                assignments, key=lambda item: _span_sort_key(item.span)
             ),
-            conditions=sorted(conditions, key=lambda item: item.span.line_start),
+            conditions=sorted(conditions, key=lambda item: _span_sort_key(item.span)),
             memory_accesses=sorted(
                 memory_accesses,
                 key=lambda item: (item.span.line_start, item.span.column_start, item.kind),
             ),
             returns=sorted(returns, key=lambda item: item.line_start),
             code=function_code,
+            unsupported_constructs=sorted(
+                {
+                    value
+                    for item in nodes
+                    for node_type, value in _UNSUPPORTED_CONTROL_TYPES.items()
+                    if item.type == node_type
+                }
+            ),
         )
 
 
@@ -222,6 +273,290 @@ def _symbols(node: Node | None, source: bytes) -> set[str]:
     }
 
 
+def _expression_symbols(node: Node | None, source: bytes) -> set[str]:
+    """Return data symbols while excluding the name part of a call expression."""
+    if node is None:
+        return set()
+    if node.type == "call_expression":
+        arguments = node.child_by_field_name("arguments")
+        if arguments is None:
+            return set()
+        return {
+            symbol
+            for argument in arguments.named_children
+            for symbol in _expression_symbols(argument, source)
+        }
+    if node.type in {"identifier", "field_identifier"}:
+        return {_text(node, source)}
+    return {
+        symbol
+        for child in node.named_children
+        for symbol in _expression_symbols(child, source)
+    }
+
+
+def _assignment_defined_symbol(left: Node, source: bytes) -> str | None:
+    current = left
+    while current.type == "parenthesized_expression" and current.named_children:
+        current = current.named_children[0]
+    if current.type in {
+        "subscript_expression",
+        "field_expression",
+        "pointer_expression",
+    }:
+        return None
+    return _defined_symbol(current, source)
+
+
+def _assignment_operator(node: Node) -> str | None:
+    if node.type != "assignment_expression":
+        return None
+    return next(
+        (
+            child.type
+            for child in node.children
+            if not child.is_named and child.type.endswith("=")
+        ),
+        None,
+    )
+
+
+def _statement_ir(
+    node: Node,
+    *,
+    file: str,
+    function: str,
+    source: bytes,
+    assignments: dict[str, Assignment],
+    calls: dict[str, CallSite],
+    context_override: tuple[str | None, str | None] | None = None,
+) -> StatementIR:
+    assignment_ids = [
+        assignment_id
+        for item in _walk(node)
+        if item.type in {"init_declarator", "assignment_expression"}
+        for assignment_id in [_stable_id("AS", file, function, item)]
+        if assignment_id in assignments
+    ]
+    call_ids = [
+        call_id
+        for item in _walk(node)
+        if item.type == "call_expression"
+        for call_id in [_stable_id("CALL", file, function, item)]
+        if call_id in calls
+    ]
+    defs = {
+        symbol
+        for assignment_id in assignment_ids
+        for symbol in assignments[assignment_id].defs
+    }
+    uses = {
+        symbol
+        for assignment_id in assignment_ids
+        for symbol in assignments[assignment_id].uses
+    }
+    uses.update(
+        symbol
+        for call_id in call_ids
+        for argument in calls[call_id].argument_symbols
+        for symbol in argument
+    )
+
+    if node.type == "declaration":
+        kind = "declaration"
+        defs.update(_declaration_symbols(node, source))
+    elif node.type == "return_statement":
+        kind = "return"
+    elif assignment_ids:
+        kind = "assignment"
+    elif call_ids:
+        kind = "call"
+    else:
+        kind = "expression"
+
+    if not assignment_ids and not call_ids:
+        uses.update(_expression_symbols(node, source))
+    update_symbols = _update_expression_symbols(node, source)
+    if update_symbols:
+        defs.update(update_symbols)
+        uses.update(update_symbols)
+
+    parent_control_id, control_branch = (
+        context_override
+        if context_override is not None
+        else _control_context(node, file=file, function=function)
+    )
+    return StatementIR(
+        statement_id=_stable_id("STMT", file, function, node),
+        kind=kind,
+        span=_span(node, file),
+        text=_text(node, source).strip(),
+        defs=defs,
+        uses=uses,
+        assignment_ids=assignment_ids,
+        call_ids=call_ids,
+        parent_control_id=parent_control_id,
+        control_branch=control_branch,
+    )
+
+
+def _declaration_symbols(node: Node, source: bytes) -> set[str]:
+    symbols: set[str] = set()
+    for child in node.named_children:
+        if child.type == "init_declarator":
+            declarator = child.child_by_field_name("declarator")
+            symbol = _defined_symbol(declarator or child, source)
+        elif child.type == "identifier" or "declarator" in child.type:
+            symbol = _defined_symbol(child, source)
+        else:
+            symbol = None
+        if symbol:
+            symbols.add(symbol)
+    return symbols
+
+
+def _update_expression_symbols(node: Node, source: bytes) -> set[str]:
+    return {
+        symbol
+        for item in _walk(node)
+        if item.type == "update_expression"
+        for symbol in _expression_symbols(item, source)
+    }
+
+
+def _control_region(
+    node: Node,
+    *,
+    condition: Condition,
+    file: str,
+    function: str,
+    source: bytes,
+    assignments: dict[str, Assignment],
+    calls: dict[str, CallSite],
+) -> ControlRegion:
+    control_id = _stable_id("CTRL", file, function, node)
+    parent_control_id, control_branch = _control_context(
+        node, file=file, function=function
+    )
+    body = (
+        node.child_by_field_name("consequence")
+        if node.type == "if_statement"
+        else node.child_by_field_name("body")
+    )
+    alternative = (
+        node.child_by_field_name("alternative")
+        if node.type == "if_statement"
+        else None
+    )
+    initializer_node = (
+        node.child_by_field_name("initializer")
+        if node.type == "for_statement"
+        else None
+    )
+    update_node = (
+        node.child_by_field_name("update")
+        if node.type == "for_statement"
+        else None
+    )
+    context = (parent_control_id, control_branch)
+    initializer = (
+        _statement_ir(
+            initializer_node,
+            file=file,
+            function=function,
+            source=source,
+            assignments=assignments,
+            calls=calls,
+            context_override=context,
+        )
+        if initializer_node is not None
+        else None
+    )
+    update = (
+        _statement_ir(
+            update_node,
+            file=file,
+            function=function,
+            source=source,
+            assignments=assignments,
+            calls=calls,
+            context_override=(control_id, "body"),
+        )
+        if update_node is not None
+        else None
+    )
+    return ControlRegion(
+        control_id=control_id,
+        kind=node.type.removesuffix("_statement"),
+        condition_id=condition.condition_id,
+        span=_span(node, file),
+        body_span=_span(body or node, file),
+        alternative_span=_span(alternative, file) if alternative is not None else None,
+        parent_control_id=parent_control_id,
+        control_branch=control_branch,
+        initializer=initializer,
+        update=update,
+    )
+
+
+def _control_context(
+    node: Node, *, file: str, function: str
+) -> tuple[str | None, str | None]:
+    current = node.parent
+    while current is not None:
+        if current.type in _CONTROL_TYPES:
+            control_id = _stable_id("CTRL", file, function, current)
+            if current.type == "if_statement":
+                alternative = current.child_by_field_name("alternative")
+                if alternative is not None and _contains(alternative, node):
+                    return control_id, "else"
+                consequence = current.child_by_field_name("consequence")
+                if consequence is not None and _contains(consequence, node):
+                    return control_id, "then"
+            else:
+                body = current.child_by_field_name("body")
+                if body is not None and _contains(body, node):
+                    return control_id, "body"
+        current = current.parent
+    return None, None
+
+
+def _contains(container: Node, item: Node) -> bool:
+    return (
+        container.start_byte <= item.start_byte
+        and item.end_byte <= container.end_byte
+    )
+
+
+def _is_for_header_component(node: Node) -> bool:
+    current = node.parent
+    while current is not None:
+        if current.type == "for_statement":
+            for field in ("initializer", "update"):
+                component = current.child_by_field_name(field)
+                if component is not None and _contains(component, node):
+                    return True
+        current = current.parent
+    return False
+
+
+def _span_sort_key(span: SourceSpan) -> tuple[int, int, int, int]:
+    return (
+        span.line_start,
+        span.column_start,
+        span.line_end,
+        span.column_end,
+    )
+
+
+def _statement_sort_key(item: StatementIR) -> tuple[int, int, int, int, str]:
+    return (*_span_sort_key(item.span), item.statement_id)
+
+
+def _control_sort_key(item: ControlRegion) -> tuple[int, int, int, int, str]:
+    return (*_span_sort_key(item.span), item.control_id)
+
+
 def _assignment(
     node: Node, *, file: str, function: str, source: bytes
 ) -> Assignment | None:
@@ -234,13 +569,18 @@ def _assignment(
     if left is None or right is None:
         return None
     target = _text(left, source).strip()
-    defined = _defined_symbol(left, source)
+    defined = _assignment_defined_symbol(left, source)
+    uses = _expression_symbols(right, source)
+    if defined is None:
+        uses.update(_expression_symbols(left, source))
+    if node.type == "assignment_expression" and _assignment_operator(node) != "=":
+        uses.update(_expression_symbols(left, source))
     return Assignment(
         assignment_id=_stable_id("AS", file, function, node),
         target=target,
         expression=_text(right, source).strip(),
         defs={defined} if defined else set(),
-        uses=_symbols(right, source),
+        uses=uses,
         span=_span(node, file),
         text=_text(node, source).strip(),
     )
@@ -256,10 +596,16 @@ def _call_site(
         if arguments_node is not None
         else []
     )
+    argument_symbols = (
+        [_expression_symbols(item, source) for item in arguments_node.named_children]
+        if arguments_node is not None
+        else []
+    )
     return CallSite(
         call_id=_stable_id("CALL", file, function, node),
         callee=_normalize_callee(_text(callee_node, source)),
         arguments=arguments,
+        argument_symbols=argument_symbols,
         assigned_to=_assigned_target(node, source),
         span=_span(node, file),
         text=_text(node, source).strip(),
@@ -295,9 +641,22 @@ def _condition(
     return Condition(
         condition_id=_stable_id("COND", file, function, condition_node),
         expression=expression,
-        symbols=_symbols(condition_node, source),
+        symbols=_expression_symbols(condition_node, source),
         operator=_comparison_operator(condition_node),
         span=_span(condition_node, file),
+        text=_text(node, source).strip(),
+    )
+
+
+def _implicit_condition(
+    node: Node, *, file: str, function: str, source: bytes
+) -> Condition:
+    return Condition(
+        condition_id=_stable_id("COND", file, function, node),
+        expression="true",
+        symbols=set(),
+        operator=None,
+        span=_span(node, file),
         text=_text(node, source).strip(),
     )
 

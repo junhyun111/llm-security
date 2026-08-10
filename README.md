@@ -129,11 +129,22 @@ Phase 2A의 Tree-sitter frontend는 C/C++ 소스를 재사용 가능한 IR로 �
 ```text
 source files
 → TreeSitterFrontend
-→ FunctionIR (parameters, calls, assignments, conditions, memory accesses, returns)
+→ FunctionIR (statements, controls, calls, assignments, conditions, memory accesses)
 → ProgramIR (1-hop direct callers/callees)
 ```
 
-구현은 `src/llm_security/analysis/ir.py`와 `analysis/frontend.py`에 있습니다. 기존 regex 기반 analyzer는 `analysis/legacy.py`의 `LegacyRegexAnalyzer`로 보존되어 있으며, Phase 2A에서는 production pipeline 동작을 바꾸지 않습니다. CFG·def-use·semantic fact·Candidate Gate 연결은 다음 Phase 범위입니다.
+Phase 2B의 실험용 `StructuralAnalyzer`는 이 IR만 사용해 함수 단위 CFG, dominator, reaching definitions, def-use graph를 계산합니다. `backward_slice()`로 sink의 변수 정의를 함수 parameter까지 역추적할 수 있습니다.
+
+```text
+FunctionIR
+→ ControlFlowGraph (true/false/loop_back/return edges)
+→ Dominators
+→ Reaching Definitions
+→ Def-Use Graph
+→ Backward Slice
+```
+
+구현은 `src/llm_security/analysis/`에 있습니다. 현재 지원하는 구조화 제어 흐름은 `if`, `if/else`, `while`, `for`, 중첩 제어문과 early return입니다. `switch`, `goto`, `break`, `continue`는 임의로 해석하지 않고 CFG warning으로 기록합니다. 기존 regex 기반 analyzer는 `analysis/legacy.py`의 `LegacyRegexAnalyzer`로 보존되며 production pipeline은 계속 기존 `LightweightStaticAnalyzer`를 사용합니다. vulnerability semantic fact, Candidate Gate 연결, Router feature 변경은 Phase 2B 범위에 포함되지 않습니다.
 
 ## 실제 프로젝트 분석
 

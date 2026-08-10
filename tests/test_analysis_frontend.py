@@ -30,9 +30,20 @@ void parse(char *buf, size_t len) {
 
     calls = {item.callee: item for item in function.calls}
     assert calls["malloc"].arguments == ["n"]
+    assert calls["malloc"].argument_symbols == [{"n"}]
     assert calls["malloc"].assigned_to == "dst"
     assert calls["memcpy"].arguments == ["dst", "buf", "len"]
+    assert calls["memcpy"].argument_symbols == [{"dst"}, {"buf"}, {"len"}]
     assert calls["helper"].arguments == ["n"]
+
+    allocation = next(
+        statement for statement in function.statements if "malloc(n)" in statement.text
+    )
+    assert allocation.kind == "declaration"
+    assert allocation.defs == {"dst"}
+    assert allocation.uses == {"n"}
+    assert len(allocation.assignment_ids) == 1
+    assert len(allocation.call_ids) == 1
 
     assert function.conditions[0].expression == "n > 16"
     assert function.conditions[0].symbols == {"n"}
@@ -101,3 +112,9 @@ int consume(char *ptr, int length) {
         access.kind == "dereference" and access.base == "ptr"
         for access in function.memory_accesses
     )
+    for_control = next(item for item in function.controls if item.kind == "for")
+    assert for_control.initializer is not None
+    assert for_control.initializer.defs == {"i"}
+    assert for_control.update is not None
+    assert for_control.update.defs == {"i"}
+    assert for_control.update.uses == {"i"}

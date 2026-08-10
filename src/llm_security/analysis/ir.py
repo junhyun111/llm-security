@@ -20,6 +20,7 @@ class CallSite:
     assigned_to: str | None
     span: SourceSpan
     text: str
+    argument_symbols: list[set[str]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -54,6 +55,34 @@ class MemoryAccess:
 
 
 @dataclass(slots=True)
+class StatementIR:
+    statement_id: str
+    kind: str
+    span: SourceSpan
+    text: str
+    defs: set[str]
+    uses: set[str]
+    assignment_ids: list[str] = field(default_factory=list)
+    call_ids: list[str] = field(default_factory=list)
+    parent_control_id: str | None = None
+    control_branch: str | None = None
+
+
+@dataclass(slots=True)
+class ControlRegion:
+    control_id: str
+    kind: str
+    condition_id: str
+    span: SourceSpan
+    body_span: SourceSpan
+    alternative_span: SourceSpan | None = None
+    parent_control_id: str | None = None
+    control_branch: str | None = None
+    initializer: StatementIR | None = None
+    update: StatementIR | None = None
+
+
+@dataclass(slots=True)
 class FunctionIR:
     name: str
     file: str
@@ -66,6 +95,9 @@ class FunctionIR:
     memory_accesses: list[MemoryAccess]
     returns: list[SourceSpan]
     code: str
+    statements: list[StatementIR] = field(default_factory=list)
+    controls: list[ControlRegion] = field(default_factory=list)
+    unsupported_constructs: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
