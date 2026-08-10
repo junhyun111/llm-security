@@ -111,6 +111,18 @@ class EvidenceValidator:
     @staticmethod
     def _has_contradicting_guard(finding: Finding, candidate: Candidate) -> bool:
         if finding.expert == ExpertFamily.MEMORY_BOUNDS:
+            if candidate.feature_schema_version == "semantic-v1":
+                return any(
+                    evidence.kind == "guard_protects_sink"
+                    and evidence.facts.get("semantically_protective") is True
+                    and (
+                        evidence.facts.get("sink_line") is None
+                        or finding.line_start
+                        <= int(evidence.facts["sink_line"])
+                        <= finding.line_end
+                    )
+                    for evidence in candidate.evidence
+                )
             return (
                 candidate.features.get("bounds_guard_count", 0.0) > 0
                 and candidate.features.get("guard_density", 0.0) >= 1.0
@@ -161,4 +173,3 @@ class EvidenceValidator:
             ),
             response.usage,
         )
-

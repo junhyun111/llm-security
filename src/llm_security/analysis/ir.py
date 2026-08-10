@@ -53,6 +53,9 @@ class Condition:
     operator: str | None
     span: SourceSpan
     text: str
+    left_info: ExpressionInfo | None = None
+    right_info: ExpressionInfo | None = None
+    unary_operator: str | None = None
 
 
 @dataclass(slots=True)

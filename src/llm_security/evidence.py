@@ -38,16 +38,33 @@ class ContextBuilder:
 
 
 _EXPERT_EVIDENCE_KINDS: dict[ExpertFamily, set[str]] = {
-    ExpertFamily.MEMORY_BOUNDS: {"memory_sink", "memory_access", "allocation"},
-    ExpertFamily.LIFETIME_RESOURCE: {"allocation", "release", "memory_access"},
+    ExpertFamily.MEMORY_BOUNDS: {
+        "memory_sink", "memory_access", "allocation", "memory_copy",
+        "memory_copy_without_guard", "unchecked_index", "guard_protects_sink",
+    },
+    ExpertFamily.LIFETIME_RESOURCE: {
+        "allocation", "release", "memory_access", "use_after_release",
+        "double_release", "unchecked_nullable_dereference",
+    },
     ExpertFamily.INTEGER_SIZE_TYPE: {
         "integer_arithmetic",
         "type_conversion",
         "allocation",
         "memory_sink",
+        "arithmetic_to_allocation",
+        "arithmetic_to_memory_sink",
+        "cast_to_size_sink",
     },
-    ExpertFamily.TAINT_API_CONTRACT: {"taint_source", "taint_sink", "memory_sink"},
-    ExpertFamily.CONTROL_STATE_ERROR: {"state", "error_path", "guard"},
-    ExpertFamily.CONCURRENCY_TOCTOU: {"concurrency", "synchronization", "toctou"},
+    ExpertFamily.TAINT_API_CONTRACT: {
+        "taint_source", "taint_sink", "memory_sink", "source_to_sink",
+        "unsanitized_source_to_sink",
+    },
+    ExpertFamily.CONTROL_STATE_ERROR: {
+        "state", "error_path", "guard", "uninitialized_use",
+        "unchecked_nullable_dereference", "guard_protects_sink",
+    },
+    ExpertFamily.CONCURRENCY_TOCTOU: {
+        "concurrency", "synchronization", "toctou", "thread_spawn",
+        "lock_acquire", "lock_release", "toctou_check_use",
+    },
 }
-

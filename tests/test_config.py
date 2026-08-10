@@ -54,3 +54,19 @@ def test_latest_alias_is_rejected(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="canonical model IDs"):
         AppConfig.from_env(env_file)
+
+
+def test_analysis_backend_and_gate_are_loaded_from_env(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ANALYSIS_BACKEND=semantic\n"
+        "CANDIDATE_GATE_ENABLED=false\n"
+        "CANDIDATE_GATE_THRESHOLD=0.25\n",
+        encoding="utf-8",
+    )
+
+    config = AppConfig.from_env(env_file)
+
+    assert config.analysis.backend == "semantic"
+    assert config.candidate_gate.enabled is False
+    assert config.candidate_gate.threshold == 0.25

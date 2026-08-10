@@ -56,25 +56,46 @@ class RuleTriggerFallback:
             return {}, []
         learned = set(learned_families)
         features = candidate.features
-        integer_trigger = (
-            features.get("integer_size_arithmetic_count", 0.0) > 0.0
-            and (
-                features.get("cast_count", 0.0) > 0.0
-                or features.get("arithmetic_to_memory_sink", 0.0) > 0.0
-                or features.get("allocation_count", 0.0) > 0.0
+        if candidate.feature_schema_version == "semantic-v1":
+            integer_trigger = any(
+                features.get(name, 0.0) > 0.0
+                for name in (
+                    "arithmetic_to_allocation_count",
+                    "arithmetic_to_memory_sink_count",
+                    "cast_to_size_sink_count",
+                )
             )
-        )
-        taint_trigger = (
-            features.get("source_sink_path", 0.0) > 0.0
-            or features.get("external_input_to_sink", 0.0) > 0.0
-        )
-        concurrency_trigger = (
-            features.get("toctou_pair", 0.0) > 0.0
-            or (
-                features.get("thread_signal_count", 0.0) > 0.0
-                and features.get("lock_signal_count", 0.0) > 0.0
+            taint_trigger = any(
+                features.get(name, 0.0) > 0.0
+                for name in (
+                    "source_to_sink_count",
+                    "unsanitized_source_to_sink_count",
+                )
             )
-        )
+            concurrency_trigger = any(
+                features.get(name, 0.0) > 0.0
+                for name in ("toctou_check_use_count", "thread_spawn_count")
+            )
+        else:
+            integer_trigger = (
+                features.get("integer_size_arithmetic_count", 0.0) > 0.0
+                and (
+                    features.get("cast_count", 0.0) > 0.0
+                    or features.get("arithmetic_to_memory_sink", 0.0) > 0.0
+                    or features.get("allocation_count", 0.0) > 0.0
+                )
+            )
+            taint_trigger = (
+                features.get("source_sink_path", 0.0) > 0.0
+                or features.get("external_input_to_sink", 0.0) > 0.0
+            )
+            concurrency_trigger = (
+                features.get("toctou_pair", 0.0) > 0.0
+                or (
+                    features.get("thread_signal_count", 0.0) > 0.0
+                    and features.get("lock_signal_count", 0.0) > 0.0
+                )
+            )
         raw = {
             ExpertFamily.INTEGER_SIZE_TYPE: 0.30 if integer_trigger else 0.0,
             ExpertFamily.TAINT_API_CONTRACT: 0.30 if taint_trigger else 0.0,
@@ -93,17 +114,20 @@ class RuleTriggerFallback:
 
 
 class AdaptiveExpertRouter:
-    artifact_version = 2
+    artifact_version = 3
 
     def __init__(
         self,
         model: ExpertRoutingModel,
         policy: AdaptiveTopKPolicy,
         triggers: RuleTriggerFallback | None = None,
+        feature_schema_version: str = "legacy-v1",
     ) -> None:
         self.model = model
         self.policy = policy
         self.triggers = triggers or RuleTriggerFallback(enabled=False)
+        self.feature_schema_version = feature_schema_version
+        self._artifact_version = self.artifact_version
 
     @property
     def available_families(self) -> tuple[ExpertFamily, ...]:
@@ -119,6 +143,15 @@ class AdaptiveExpertRouter:
         use_rule_fallback: bool = True,
     ) -> "AdaptiveExpertRouter":
         materialized = list(samples)
+        schemas = {
+            sample.candidate.feature_schema_version for sample in materialized
+        }
+        if len(schemas) != 1:
+            raise ValueError(
+                "Router training samples must use exactly one feature schema; got: "
+                + ", ".join(sorted(schemas))
+            )
+        feature_schema_version = next(iter(schemas))
         labels = [_single_label(sample) for sample in materialized]
         model = SoftmaxRoutingModel(seed=seed).fit(
             [sample.candidate.features for sample in materialized], labels
@@ -127,9 +160,15 @@ class AdaptiveExpertRouter:
             model=model,
             policy=AdaptiveTopKPolicy(policy_config),
             triggers=RuleTriggerFallback(enabled=use_rule_fallback),
+            feature_schema_version=feature_schema_version,
         )
 
     def route(self, candidate: Candidate) -> RouteDecision:
+        if candidate.feature_schema_version != self.feature_schema_version:
+            raise ValueError(
+                f"Router expects {self.feature_schema_version} but candidate uses "
+                f"{candidate.feature_schema_version}. Train or load a matching Router."
+            )
         learned_scores = self.model.predict_proba(candidate.features)
         trigger_scores, trigger_reasons = self.triggers.score(
             candidate, learned_scores
@@ -271,7 +310,10 @@ class AdaptiveExpertRouter:
     def load(cls, path: str | Path) -> "AdaptiveExpertRouter":
         with Path(path).open("rb") as handle:
             router = pickle.load(handle)  # noqa: S301 - trusted local artifact
-        if not isinstance(router, cls) or router.artifact_version != cls.artifact_version:
+        if (
+            not isinstance(router, cls)
+            or getattr(router, "_artifact_version", None) != cls.artifact_version
+        ):
             raise TypeError(
                 "Incompatible Router artifact. Run 01_train_router.ipynb again."
             )

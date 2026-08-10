@@ -116,6 +116,9 @@ def load_router_samples_jsonl(path: str | Path) -> list[RouterSample]:
                     ),
                     callers=[str(value) for value in item.get("callers", [])],
                     callees=[str(value) for value in item.get("callees", [])],
+                    feature_schema_version=str(
+                        item.get("feature_schema_version", "legacy-v1")
+                    ),
                 )
                 samples.append(
                     RouterSample(

@@ -21,6 +21,7 @@ from .datasets import (
     write_cases_jsonl,
     write_router_samples_jsonl,
 )
+from .analysis.protocols import CandidateAnalyzer
 from .models import Candidate, ExpertFamily, GroundTruth, ProjectCase
 from .static_analysis import LightweightStaticAnalyzer
 
@@ -161,6 +162,7 @@ def prepare_arvo_cases(
     failure_log: str | Path | None = None,
     checkpoint_every: int = 25,
     allow_partial: bool = False,
+    analyzer: CandidateAnalyzer | None = None,
 ) -> list[ProjectCase]:
     if count is not None and count < 1:
         raise ValueError("count must be positive")
@@ -173,7 +175,7 @@ def prepare_arvo_cases(
         token=github_token or os.getenv("GITHUB_TOKEN"),
         cache_directory=cache_directory,
     )
-    analyzer = LightweightStaticAnalyzer(max_candidates=500)
+    selected_analyzer = analyzer or LightweightStaticAnalyzer(max_candidates=500)
     cases = load_cases_jsonl(destination) if resume and destination.exists() else []
     selected_ids = {
         int(case.case_id.removeprefix("arvo-"))
@@ -220,7 +222,7 @@ def prepare_arvo_cases(
         if case is None:
             record_failure(record, "no eligible C/C++ source file in fix patch")
             continue
-        if require_routable and not truth_candidates(case, analyzer):
+        if require_routable and not truth_candidates(case, selected_analyzer):
             record_failure(record, "patch location has no static candidate")
             continue
         cases.append(case)
@@ -247,11 +249,12 @@ def prepare_arvo_training_dataset(
     output_directory: str | Path,
     *,
     seed: int = 2026,
+    analyzer: CandidateAnalyzer | None = None,
 ) -> dict[str, Any]:
     destination = Path(output_directory)
     destination.mkdir(parents=True, exist_ok=True)
     split_cases = split_cases_by_project(cases, seed=seed)
-    analyzer = LightweightStaticAnalyzer(max_candidates=500)
+    selected_analyzer = analyzer or LightweightStaticAnalyzer(max_candidates=500)
     manifest: dict[str, Any] = {
         "source": "ARVO v3.0.0",
         "seed": seed,
@@ -260,7 +263,7 @@ def prepare_arvo_training_dataset(
     }
     for split in ("train", "dev", "test"):
         current_cases = split_cases[split]
-        samples = router_samples_from_cases(current_cases, analyzer=analyzer)
+        samples = router_samples_from_cases(current_cases, analyzer=selected_analyzer)
         write_cases_jsonl(current_cases, destination / f"cases_{split}.jsonl")
         write_router_samples_jsonl(samples, destination / f"router_{split}.jsonl")
         families = Counter(
@@ -435,7 +438,7 @@ def split_cases_by_project(
 
 
 def router_samples_from_cases(
-    cases: Iterable[ProjectCase], *, analyzer: LightweightStaticAnalyzer
+    cases: Iterable[ProjectCase], *, analyzer: CandidateAnalyzer
 ) -> list[RouterSample]:
     samples: list[RouterSample] = []
     for case in cases:
@@ -472,7 +475,7 @@ def router_samples_from_cases(
 
 
 def truth_candidates(
-    case: ProjectCase, analyzer: LightweightStaticAnalyzer
+    case: ProjectCase, analyzer: CandidateAnalyzer
 ) -> list[Candidate]:
     candidates = analyzer.analyze(case)
     return [

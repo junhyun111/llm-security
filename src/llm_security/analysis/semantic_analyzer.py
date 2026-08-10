@@ -302,9 +302,11 @@ class SemanticAnalyzer:
             analysis,
             sink_node_id=node_id,
             sensitive_symbols=sensitive,
+            required_guard_kind="upper_bound",
         )
-        facts.extend(self._guard_facts(analysis, guards, name))
-        if not guards and not analysis.cfg.warnings:
+        protective_guards = [guard for guard in guards if guard.semantically_protective]
+        facts.extend(self._guard_facts(analysis, protective_guards, name))
+        if not protective_guards and not analysis.cfg.warnings:
             facts.append(
                 self._fact(
                     analysis,
@@ -574,15 +576,19 @@ class SemanticAnalyzer:
                         analysis,
                         sink_node_id=access_node,
                         sensitive_symbols={symbol},
+                        required_guard_kind="non_null",
                     )
+                    protective_guards = [
+                        guard for guard in guards if guard.semantically_protective
+                    ]
                     facts.extend(
                         self._guard_facts(
                             analysis,
-                            guards,
+                            protective_guards,
                             self.catalog.canonical_name(call.callee),
                         )
                     )
-                    if not guards and not analysis.cfg.warnings:
+                    if not protective_guards and not analysis.cfg.warnings:
                         facts.append(
                             self._fact(
                                 analysis,
@@ -619,9 +625,11 @@ class SemanticAnalyzer:
                 analysis,
                 sink_node_id=node_id,
                 sensitive_symbols=access.index_symbols,
+                required_guard_kind="upper_bound",
             )
-            facts.extend(self._guard_facts(analysis, guards, access.text))
-            if not guards and not analysis.cfg.warnings:
+            protective_guards = [guard for guard in guards if guard.semantically_protective]
+            facts.extend(self._guard_facts(analysis, protective_guards, access.text))
+            if not protective_guards and not analysis.cfg.warnings:
                 facts.append(
                     self._fact(
                         analysis,
@@ -699,7 +707,10 @@ class SemanticAnalyzer:
                 attributes={
                     "condition_id": guard.condition_id,
                     "sink_branch": guard.sink_branch,
+                    "guard_kind": guard.guard_kind,
+                    "effective_operator": guard.effective_operator,
                     "path_restricting": guard.path_restricting,
+                    "semantically_protective": guard.semantically_protective,
                     "control_flow_reliable": not analysis.cfg.warnings,
                 },
             )

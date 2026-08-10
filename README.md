@@ -159,7 +159,28 @@ ProgramAnalysis
 
 기본 catalog는 `malloc/calloc/realloc`, `memcpy/memmove/strncpy/strcpy`, `free`, `read/recv/fread/getenv`, 명령·파일 sink, pthread API와 TOCTOU API를 지원합니다. allocation/release, memory copy와 guard, size arithmetic/cast flow, source-to-sink, use-after-release/double-release, uninitialized use, nullable dereference, lock/thread 및 TOCTOU fact를 생성할 수 있습니다.
 
-`switch`, `goto`, `break`, `continue` 등으로 CFG warning이 있으면 local positive fact는 유지하되 `without_guard`, `unchecked`, `unsanitized` 같은 부재 기반 fact는 생성하지 않습니다. 이 계층은 아직 production factory, Candidate feature, Router 또는 LLM Agent에 연결되지 않습니다.
+`switch`, `goto`, `break`, `continue` 등으로 CFG warning이 있으면 local positive fact는 유지하되 `without_guard`, `unchecked`, `unsanitized` 같은 부재 기반 fact는 생성하지 않습니다. Phase 2C 계층 자체는 Candidate나 Router를 알지 않으며, 아래 Phase 2D adapter를 통해서만 pipeline에 연결됩니다.
+
+## Semantic analysis backend and Candidate Gate
+
+Phase 2D는 semantic fact를 고정된 `semantic-v1` feature, Evidence, suspicion score와 Candidate로 변환합니다. Candidate는 모두 생성한 뒤 Gate에서 별도로 판정하며, `MAX_CANDIDATES` 제한은 Gate 통과 후 적용됩니다.
+
+```text
+StructuralAnalyzer → SemanticAnalyzer
+→ SemanticFeatureExtractor + SemanticEvidenceNormalizer
+→ SuspicionScorer → Candidate
+→ CandidateGate → AdaptiveExpertRouter
+```
+
+분석 backend는 `.env`에서 선택합니다.
+
+```dotenv
+ANALYSIS_BACKEND=legacy
+CANDIDATE_GATE_ENABLED=true
+CANDIDATE_GATE_THRESHOLD=0.40
+```
+
+기본값은 아직 `legacy`입니다. 기존 Router와 semantic Candidate를 섞지 않도록 Candidate와 Router가 `legacy-v1` 또는 `semantic-v1` feature schema를 기록하고, schema가 다르면 inference를 중단합니다. Router artifact format은 v3이며 기존 artifact는 재학습 후 사용해야 합니다. Semantic Router 데이터 재생성과 Gate threshold calibration은 다음 실험 단계의 범위입니다.
 
 ## 실제 프로젝트 분석
 

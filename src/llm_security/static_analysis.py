@@ -111,7 +111,7 @@ class LightweightStaticAnalyzer:
     correctness. Production adapters can emit the same Candidate/Evidence schema.
     """
 
-    def __init__(self, max_candidates: int = 50, context_lines: int = 18) -> None:
+    def __init__(self, max_candidates: int | None = 50, context_lines: int = 18) -> None:
         self.max_candidates = max_candidates
         self.context_lines = context_lines
 
@@ -123,7 +123,7 @@ class LightweightStaticAnalyzer:
                 if candidate is not None:
                     candidates.append(candidate)
         candidates.sort(key=lambda item: (-item.static_score, item.file, item.line_start))
-        return candidates[: self.max_candidates]
+        return candidates if self.max_candidates is None else candidates[: self.max_candidates]
 
     def extract_functions(self, source: str, file_name: str) -> list[FunctionRegion]:
         regions = self._tree_sitter_functions(source, file_name)

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from .aggregation import FindingAggregator
+from .analysis import SemanticStaticAnalyzer
 from .config import AppConfig
 from .evidence import ContextBuilder
 from .experts import ExpertRunner
 from .llm import OpenRouterClient
 from .pipeline import VulnerabilityPipeline
-from .routing import Router
+from .routing import CandidateGate, Router
 from .static_analysis import LightweightStaticAnalyzer
 from .validation import EvidenceValidator
 
@@ -24,9 +25,13 @@ def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
         provider=config.model.provider,
         structured_output=config.model.structured_output,
     )
-    analyzer = LightweightStaticAnalyzer(
-        max_candidates=config.analysis.max_candidates_per_project,
-        context_lines=config.analysis.context_lines,
+    analyzer = (
+        SemanticStaticAnalyzer()
+        if config.analysis.backend == "semantic"
+        else LightweightStaticAnalyzer(
+            max_candidates=None,
+            context_lines=config.analysis.context_lines,
+        )
     )
     return VulnerabilityPipeline(
         analyzer=analyzer,
@@ -43,4 +48,9 @@ def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
             model=config.model.validator_model,
             use_llm_for_uncertain=config.validation.use_llm_for_uncertain,
         ),
+        candidate_gate=CandidateGate(
+            enabled=config.candidate_gate.enabled,
+            threshold=config.candidate_gate.threshold,
+        ),
+        max_candidates=config.analysis.max_candidates_per_project,
     )

@@ -672,6 +672,9 @@ def _condition(
     expression = _text(condition_node, source).strip()
     if expression.startswith("(") and expression.endswith(")"):
         expression = expression[1:-1].strip()
+    left_info, right_info, unary_operator = _condition_expression_info(
+        condition_node, source
+    )
     return Condition(
         condition_id=_stable_id("COND", file, function, condition_node),
         expression=expression,
@@ -679,6 +682,9 @@ def _condition(
         operator=_comparison_operator(condition_node),
         span=_span(condition_node, file),
         text=_text(node, source).strip(),
+        left_info=left_info,
+        right_info=right_info,
+        unary_operator=unary_operator,
     )
 
 
@@ -708,6 +714,35 @@ def _comparison_operator(node: Node) -> str | None:
         (child.type for child in current.children if child.type in _COMPARISON_OPERATORS),
         None,
     )
+
+
+def _condition_expression_info(
+    node: Node, source: bytes
+) -> tuple[ExpressionInfo | None, ExpressionInfo | None, str | None]:
+    current = node
+    while current.type in {"parenthesized_expression", "condition_clause"}:
+        named = current.named_children
+        if len(named) != 1:
+            break
+        current = named[0]
+    if current.type == "binary_expression":
+        left = current.child_by_field_name("left")
+        right = current.child_by_field_name("right")
+        return _expression_info(left, source), _expression_info(right, source), None
+    if current.type in {"unary_expression", "pointer_expression"}:
+        argument = current.child_by_field_name("argument") or (
+            current.named_children[-1] if current.named_children else None
+        )
+        operator = next(
+            (
+                child.type
+                for child in current.children
+                if not child.is_named and child.type in {"!", "~", "+", "-"}
+            ),
+            None,
+        )
+        return _expression_info(argument, source), None, operator
+    return _expression_info(current, source), None, None
 
 
 def _memory_access(

@@ -8,6 +8,7 @@ from .api_semantics import (
     SinkSpec,
     SourceSpec,
 )
+from .candidate_builder import SemanticCandidateBuilder
 from .control_flow import (
     CFGNode,
     ControlFlowBuilder,
@@ -26,6 +27,12 @@ from .dataflow import (
     backward_slice,
 )
 from .frontend import TreeSitterFrontend
+from .evidence_normalizer import SemanticEvidenceNormalizer
+from .features import (
+    FACT_FEATURE_MAP,
+    FEATURE_SCHEMA_SEMANTIC_V1,
+    SemanticFeatureExtractor,
+)
 from .guards import GuardRelation, find_guard_relations
 from .index import FunctionAnalysisIndex
 from .ir import (
@@ -48,18 +55,22 @@ from .path_queries import (
     shortest_path,
     shortest_path_without_definition,
 )
+from .protocols import CandidateAnalyzer
 from .semantic_analyzer import (
     SemanticAnalyzer,
     SemanticFunctionAnalysis,
     SemanticProgramAnalysis,
 )
 from .semantic_facts import SemanticFact, SemanticFactKind
+from .semantic_static import SemanticStaticAnalyzer
+from .suspicion import RISK_WEIGHTS, SuspicionScorer
 from .taint import TaintAnalyzer, TaintPath
 
 __all__ = [
     "Assignment",
     "AllocationSpec",
     "ApiCatalog",
+    "CandidateAnalyzer",
     "CallSite",
     "CFGNode",
     "Condition",
@@ -71,6 +82,8 @@ __all__ = [
     "DefUseEdge",
     "DominatorAnalysis",
     "ExpressionInfo",
+    "FACT_FEATURE_MAP",
+    "FEATURE_SCHEMA_SEMANTIC_V1",
     "FunctionIR",
     "FunctionAnalysis",
     "FunctionAnalysisIndex",
@@ -84,19 +97,25 @@ __all__ = [
     "ReleaseSpec",
     "SanitizerSpec",
     "SemanticAnalyzer",
+    "SemanticCandidateBuilder",
+    "SemanticEvidenceNormalizer",
     "SemanticFact",
     "SemanticFactKind",
     "SemanticFunctionAnalysis",
+    "SemanticFeatureExtractor",
     "SemanticProgramAnalysis",
+    "SemanticStaticAnalyzer",
     "SinkSpec",
     "SliceStep",
     "SourceSpan",
     "StatementIR",
     "StructuralAnalyzer",
     "SourceSpec",
+    "SuspicionScorer",
     "TaintAnalyzer",
     "TaintPath",
     "TreeSitterFrontend",
+    "RISK_WEIGHTS",
     "backward_slice",
     "branch_reachability",
     "compute_dominators",

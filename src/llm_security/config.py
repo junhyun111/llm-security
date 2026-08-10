@@ -39,11 +39,13 @@ class RouterConfig:
 
 @dataclass(slots=True)
 class CandidateGateConfig:
+    enabled: bool = True
     threshold: float = 0.40
 
 
 @dataclass(slots=True)
 class AnalysisConfig:
+    backend: str = "legacy"
     max_candidates_per_project: int = 50
     context_lines: int = 25
     max_context_characters: int = 30_000
@@ -122,9 +124,11 @@ class AppConfig:
                 ),
             ),
             candidate_gate=CandidateGateConfig(
+                enabled=_as_bool(values.get("CANDIDATE_GATE_ENABLED", "true")),
                 threshold=float(values.get("CANDIDATE_GATE_THRESHOLD", "0.40"))
             ),
             analysis=AnalysisConfig(
+                backend=values.get("ANALYSIS_BACKEND", "legacy").strip().lower(),
                 max_candidates_per_project=int(values.get("MAX_CANDIDATES", "50")),
                 context_lines=int(values.get("CONTEXT_LINES", "25")),
                 max_context_characters=int(values.get("MAX_CONTEXT_CHARACTERS", "30000")),
@@ -163,6 +167,8 @@ class AppConfig:
             raise ValueError("ROUTER_TARGET_COVERAGE must be between 0 and 1")
         if self.analysis.max_candidates_per_project < 1:
             raise ValueError("MAX_CANDIDATES must be positive")
+        if self.analysis.backend not in {"legacy", "semantic"}:
+            raise ValueError("ANALYSIS_BACKEND must be legacy or semantic")
         for model_id in (
             self.model.expert_model,
             self.model.validator_model,

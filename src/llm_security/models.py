@@ -47,6 +47,7 @@ class Candidate:
     suspicion_score: float
     callers: list[str]
     callees: list[str]
+    feature_schema_version: str
 
     def __init__(
         self,
@@ -62,6 +63,7 @@ class Candidate:
         suspicion_score: float = 0.0,
         callers: list[str] | None = None,
         callees: list[str] | None = None,
+        feature_schema_version: str = "legacy-v1",
         *,
         static_score: float | None = None,
     ) -> None:
@@ -82,6 +84,7 @@ class Candidate:
         )
         self.callers = list(callers or [])
         self.callees = list(callees or [])
+        self.feature_schema_version = feature_schema_version
 
     @property
     def static_score(self) -> float:
@@ -176,6 +179,8 @@ class PipelineResult:
     findings: list[Finding]
     validations: list[ValidationResult]
     usage: list[UsageRecord]
+    pre_gate_candidates: list[Candidate] = field(default_factory=list)
+    gate_decisions: list[Any] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
     @property

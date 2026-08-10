@@ -54,6 +54,16 @@ def test_nested_non_dominating_guard_is_not_protection() -> None:
     assert SemanticFactKind.MEMORY_COPY_WITHOUT_GUARD in _kinds(analysis)
 
 
+def test_lower_bound_path_restriction_is_not_memory_protection() -> None:
+    analysis = _analyze(
+        "void f(char *d, char *s, int len) { "
+        "if (len > 0) memcpy(d, s, len); }"
+    )
+
+    assert SemanticFactKind.GUARD_PROTECTS_SINK not in _kinds(analysis)
+    assert SemanticFactKind.MEMORY_COPY_WITHOUT_GUARD in _kinds(analysis)
+
+
 def test_arithmetic_and_cast_flow_to_size_sinks() -> None:
     allocation = _analyze(
         "void f(int count) { char *p = malloc(count * sizeof(int)); use(p); }"
@@ -118,6 +128,18 @@ def test_nullable_dereference_respects_dominating_guard() -> None:
 
     assert SemanticFactKind.UNCHECKED_NULLABLE_DEREFERENCE in _kinds(unchecked)
     assert SemanticFactKind.UNCHECKED_NULLABLE_DEREFERENCE not in _kinds(checked)
+
+
+def test_null_branch_direction_must_really_protect_dereference() -> None:
+    wrong_branch = _analyze(
+        "void f(int n) { char *p = malloc(n); if (p) return; *p = 1; }"
+    )
+    protected = _analyze(
+        "void f(int n) { char *p = malloc(n); if (!p) return; *p = 1; }"
+    )
+
+    assert SemanticFactKind.UNCHECKED_NULLABLE_DEREFERENCE in _kinds(wrong_branch)
+    assert SemanticFactKind.UNCHECKED_NULLABLE_DEREFERENCE not in _kinds(protected)
 
 
 def test_toctou_check_and_use_share_reaching_path_symbol() -> None:
