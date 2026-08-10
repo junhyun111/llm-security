@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 
 DEFAULT_EXPERT_MODEL = "openai/gpt-5.4-mini"
@@ -30,9 +29,17 @@ class ModelConfig:
 
 @dataclass(slots=True)
 class RouterConfig:
-    kind: Literal["rule", "learned"] = "learned"
-    threshold: float = 0.25
-    max_experts: int = 3
+    high_confidence: float = 0.72
+    min_margin: float = 0.18
+    max_entropy: float = 1.0
+    max_experts: int = 2
+    target_coverage: float = 0.95
+    use_rule_fallback: bool = True
+
+
+@dataclass(slots=True)
+class CandidateGateConfig:
+    threshold: float = 0.40
 
 
 @dataclass(slots=True)
@@ -61,6 +68,7 @@ class RuntimeConfig:
 class AppConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     router: RouterConfig = field(default_factory=RouterConfig)
+    candidate_gate: CandidateGateConfig = field(default_factory=CandidateGateConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -100,9 +108,21 @@ class AppConfig:
                 ),
             ),
             router=RouterConfig(
-                kind=values.get("ROUTER_KIND", "learned"),
-                threshold=float(values.get("ROUTER_THRESHOLD", "0.25")),
-                max_experts=int(values.get("ROUTER_MAX_EXPERTS", "3")),
+                high_confidence=float(
+                    values.get("ROUTER_HIGH_CONFIDENCE", "0.72")
+                ),
+                min_margin=float(values.get("ROUTER_MIN_MARGIN", "0.18")),
+                max_entropy=float(values.get("ROUTER_MAX_ENTROPY", "1.0")),
+                max_experts=int(values.get("ROUTER_MAX_EXPERTS", "2")),
+                target_coverage=float(
+                    values.get("ROUTER_TARGET_COVERAGE", "0.95")
+                ),
+                use_rule_fallback=_as_bool(
+                    values.get("USE_RULE_FALLBACK", "true")
+                ),
+            ),
+            candidate_gate=CandidateGateConfig(
+                threshold=float(values.get("CANDIDATE_GATE_THRESHOLD", "0.40"))
             ),
             analysis=AnalysisConfig(
                 max_candidates_per_project=int(values.get("MAX_CANDIDATES", "50")),
@@ -129,12 +149,18 @@ class AppConfig:
         return config
 
     def validate(self) -> None:
-        if self.router.kind not in {"rule", "learned"}:
-            raise ValueError("ROUTER_KIND must be rule or learned")
-        if not 0.0 <= self.router.threshold <= 1.0:
-            raise ValueError("ROUTER_THRESHOLD must be between 0 and 1")
-        if not 1 <= self.router.max_experts <= 6:
-            raise ValueError("ROUTER_MAX_EXPERTS must be between 1 and 6")
+        if not 0.0 <= self.candidate_gate.threshold <= 1.0:
+            raise ValueError("CANDIDATE_GATE_THRESHOLD must be between 0 and 1")
+        if not 0.0 <= self.router.high_confidence <= 1.0:
+            raise ValueError("ROUTER_HIGH_CONFIDENCE must be between 0 and 1")
+        if not 0.0 <= self.router.min_margin <= 1.0:
+            raise ValueError("ROUTER_MIN_MARGIN must be between 0 and 1")
+        if self.router.max_entropy < 0.0:
+            raise ValueError("ROUTER_MAX_ENTROPY cannot be negative")
+        if self.router.max_experts not in {1, 2}:
+            raise ValueError("ROUTER_MAX_EXPERTS must be 1 or 2")
+        if not 0.0 <= self.router.target_coverage <= 1.0:
+            raise ValueError("ROUTER_TARGET_COVERAGE must be between 0 and 1")
         if self.analysis.max_candidates_per_project < 1:
             raise ValueError("MAX_CANDIDATES must be positive")
         for model_id in (

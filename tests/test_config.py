@@ -24,6 +24,27 @@ def test_models_and_key_are_loaded_from_env(tmp_path, monkeypatch) -> None:
     assert config.model.reasoning_enabled is False
 
 
+def test_adaptive_router_policy_is_loaded_from_env(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ROUTER_HIGH_CONFIDENCE=0.80\n"
+        "ROUTER_MIN_MARGIN=0.25\n"
+        "ROUTER_MAX_ENTROPY=0.90\n"
+        "ROUTER_MAX_EXPERTS=2\n"
+        "ROUTER_TARGET_COVERAGE=0.96\n"
+        "USE_RULE_FALLBACK=false\n",
+        encoding="utf-8",
+    )
+
+    config = AppConfig.from_env(env_file)
+
+    assert config.router.high_confidence == 0.80
+    assert config.router.min_margin == 0.25
+    assert config.router.max_entropy == 0.90
+    assert config.router.target_coverage == 0.96
+    assert config.router.use_rule_fallback is False
+
+
 def test_latest_alias_is_rejected(tmp_path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(

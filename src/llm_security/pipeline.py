@@ -3,7 +3,7 @@ from __future__ import annotations
 from .aggregation import FindingAggregator
 from .experts import ExpertRunner
 from .models import PipelineResult, ProjectCase
-from .router import Router
+from .routing import Router
 from .static_analysis import LightweightStaticAnalyzer
 from .validation import EvidenceValidator
 
@@ -39,4 +39,3 @@ class VulnerabilityPipeline:
             usage=expert_output.usage + validator_usage,
             errors=expert_output.errors,
         )
-

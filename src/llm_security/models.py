@@ -27,10 +27,13 @@ class Evidence:
     file: str
     line: int
     expression: str
+    function: str = ""
+    subject: str | None = None
+    object: str | None = None
     facts: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, init=False)
 class Candidate:
     candidate_id: str
     project_id: str
@@ -41,7 +44,49 @@ class Candidate:
     code: str
     evidence: list[Evidence]
     features: dict[str, float]
-    static_score: float
+    suspicion_score: float
+    callers: list[str]
+    callees: list[str]
+
+    def __init__(
+        self,
+        candidate_id: str,
+        project_id: str,
+        file: str,
+        function: str,
+        line_start: int,
+        line_end: int,
+        code: str,
+        evidence: list[Evidence],
+        features: dict[str, float],
+        suspicion_score: float = 0.0,
+        callers: list[str] | None = None,
+        callees: list[str] | None = None,
+        *,
+        static_score: float | None = None,
+    ) -> None:
+        # ``static_score`` is accepted only while Phase 2 still uses the
+        # fallback analyzer. New code must use the semantically distinct
+        # suspicion score.
+        self.candidate_id = candidate_id
+        self.project_id = project_id
+        self.file = file
+        self.function = function
+        self.line_start = line_start
+        self.line_end = line_end
+        self.code = code
+        self.evidence = evidence
+        self.features = features
+        self.suspicion_score = (
+            float(static_score) if static_score is not None else float(suspicion_score)
+        )
+        self.callers = list(callers or [])
+        self.callees = list(callees or [])
+
+    @property
+    def static_score(self) -> float:
+        """Temporary read-only alias for the Phase 2 analyzer migration."""
+        return self.suspicion_score
 
 
 @dataclass(slots=True)
@@ -72,7 +117,13 @@ class RouteDecision:
     candidate_id: str
     scores: dict[ExpertFamily, float]
     selected: list[ExpertFamily]
-    router_kind: str
+    top1_confidence: float
+    top1_top2_margin: float
+    policy: str
+    reasons: list[str]
+    available_families: list[ExpertFamily] = field(default_factory=list)
+    learned_scores: dict[ExpertFamily, float] = field(default_factory=dict)
+    trigger_scores: dict[ExpertFamily, float] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

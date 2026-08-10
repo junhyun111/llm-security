@@ -6,7 +6,7 @@ from .evidence import ContextBuilder
 from .experts import ExpertRunner
 from .llm import OpenRouterClient
 from .pipeline import VulnerabilityPipeline
-from .router import Router
+from .routing import Router
 from .static_analysis import LightweightStaticAnalyzer
 from .validation import EvidenceValidator
 

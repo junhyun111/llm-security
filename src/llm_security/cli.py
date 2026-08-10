@@ -11,7 +11,7 @@ from .datasets import load_cases_jsonl, load_router_samples_jsonl, write_cases_j
 from .experiment import ExperimentRunner
 from .factory import build_pipeline
 from .models import ProjectCase, to_dict
-from .router import LearnedRouter, RuleRouter, train_and_evaluate_router
+from .routing import AdaptiveExpertRouter, RoutingPolicyConfig
 
 
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp"}
@@ -28,7 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
         "train-router", help="Train and evaluate a Router from Candidate/label JSONL files"
     )
     train_parser.add_argument("--train", required=True)
-    train_parser.add_argument("--test", required=True)
+    train_parser.add_argument(
+        "--dev", required=True, help="Dev JSONL used only to calibrate routing policy"
+    )
     train_parser.add_argument("--env-file", default=".env")
     train_parser.add_argument("--output", default="router.pkl")
 
@@ -96,15 +98,25 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "train-router":
         config = AppConfig.from_env(args.env_file)
-        router, metrics = train_and_evaluate_router(
+        router = AdaptiveExpertRouter.fit(
             load_router_samples_jsonl(args.train),
-            load_router_samples_jsonl(args.test),
-            threshold=config.router.threshold,
-            max_experts=config.router.max_experts,
+            policy_config=_routing_policy_config(config),
             seed=config.runtime.seed,
+            use_rule_fallback=config.router.use_rule_fallback,
         )
+        dev_samples = load_router_samples_jsonl(args.dev)
+        calibration = router.calibrate_policy(
+            dev_samples, target_coverage=config.router.target_coverage
+        )
+        metrics = router.evaluate(dev_samples)
         router.save(args.output)
-        print(json.dumps(to_dict(metrics), ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {"calibration": to_dict(calibration), "metrics": to_dict(metrics)},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
     if args.command == "analyze":
         config = AppConfig.from_env(args.env_file)
@@ -190,17 +202,21 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _load_router(config: AppConfig, artifact: str | None):
-    if config.router.kind == "rule":
-        return RuleRouter(
-            threshold=config.router.threshold,
-            max_experts=config.router.max_experts,
-        )
     if not artifact:
         raise ValueError(
-            "Learned routing requires --router-artifact. "
-            "Create one in the smoke notebook or with train-router."
+            "Adaptive routing requires --router-artifact. "
+            "Create one with 01_train_router.ipynb or train-router."
         )
-    return LearnedRouter.load(artifact)
+    return AdaptiveExpertRouter.load(artifact)
+
+
+def _routing_policy_config(config: AppConfig) -> RoutingPolicyConfig:
+    return RoutingPolicyConfig(
+        high_confidence=config.router.high_confidence,
+        min_margin=config.router.min_margin,
+        max_entropy=config.router.max_entropy,
+        max_experts=config.router.max_experts,
+    )
 
 
 def _read_sources(path: Path) -> dict[str, str]:

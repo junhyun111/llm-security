@@ -103,12 +103,19 @@ def load_router_samples_jsonl(path: str | Path) -> list[RouterSample]:
                             file=evidence["file"],
                             line=int(evidence["line"]),
                             expression=evidence["expression"],
+                            function=str(evidence.get("function", item["function"])),
+                            subject=evidence.get("subject"),
+                            object=evidence.get("object"),
                             facts=dict(evidence.get("facts", {})),
                         )
                         for evidence in item.get("evidence", [])
                     ],
                     features={str(key): float(value) for key, value in item["features"].items()},
-                    static_score=float(item.get("static_score", 0.0)),
+                    suspicion_score=float(
+                        item.get("suspicion_score", item.get("static_score", 0.0))
+                    ),
+                    callers=[str(value) for value in item.get("callers", [])],
+                    callees=[str(value) for value in item.get("callees", [])],
                 )
                 samples.append(
                     RouterSample(
@@ -121,4 +128,3 @@ def load_router_samples_jsonl(path: str | Path) -> list[RouterSample]:
                     f"Invalid router sample JSONL at line {line_number}: {error}"
                 ) from error
     return samples
-

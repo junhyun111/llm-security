@@ -80,18 +80,18 @@ python -m llm_security.cli split-arvo `
 python -m jupyter lab
 ```
 
-1. `01_train_router.ipynb`: ARVO train만 사용해 학습하고 `models/router-arvo.pkl` 저장
-2. `02_evaluate_router.ipynb`: 저장된 Router를 dev/test에서 평가하고 `models/router-arvo-metrics.json` 저장
+1. `01_train_router.ipynb`: ARVO train으로 multiclass Softmax Router를 학습하고 `models/router-arvo.pkl` 저장
+2. `02_evaluate_router.ipynb`: dev에서 Adaptive Top-k policy를 calibration하고 test에서 평가한 뒤 `models/router-arvo-metrics.json` 저장
 3. `03_run_agents.ipynb`: Router와 OpenRouter LLM 에이전트로 실제 benchmark 실행
 
 앞의 두 노트북은 OpenRouter API를 사용하지 않습니다. 세 번째 노트북만 `.env`의 API key와 `RUN_PAID_EXPERIMENTS=1`이 필요합니다. OpenRouter LLM 자체를 fine-tuning하는 것이 아니라 조건부 Expert Router를 학습합니다.
 
-CLI로 학습하려면 다음을 실행합니다. 최종 성능 확인 전에는 `--test`에 dev 파일을 사용하는 것을 권장합니다.
+CLI로 학습하려면 다음을 실행합니다. Train은 확률 모델 학습에, dev는 Adaptive Top-k policy calibration에만 사용됩니다.
 
 ```powershell
 python -m llm_security.cli train-router `
   --train data\arvo\router_train.jsonl `
-  --test data\arvo\router_dev.jsonl `
+  --dev data\arvo\router_dev.jsonl `
   --env-file .env `
   --output models\router-arvo.pkl
 ```
@@ -107,6 +107,20 @@ OPENROUTER_STRONG_MODEL=poolside/laguna-xs-2.1:free
 ```
 
 전체 변수 설명과 기본값은 `.env.example`에 있습니다. API key는 결과 파일이나 노트북 출력에 기록하지 않습니다.
+
+Adaptive Router 설정은 다음과 같습니다.
+
+```dotenv
+CANDIDATE_GATE_THRESHOLD=0.40
+ROUTER_HIGH_CONFIDENCE=0.72
+ROUTER_MIN_MARGIN=0.18
+ROUTER_MAX_ENTROPY=1.0
+ROUTER_MAX_EXPERTS=2
+ROUTER_TARGET_COVERAGE=0.95
+USE_RULE_FALLBACK=true
+```
+
+Router 모델은 학습 데이터에 존재하는 Expert family만 class로 학습합니다. 학습되지 않은 Integer·Taint·Concurrency family는 별도 rule-trigger 점수로 보조하며, 결과 JSON에는 learned score와 trigger score가 구분되어 기록됩니다.
 
 ## 실제 프로젝트 분석
 
