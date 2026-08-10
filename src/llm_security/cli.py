@@ -57,13 +57,38 @@ def build_parser() -> argparse.ArgumentParser:
         "prepare-arvo", help="Prepare project-split Router training data from ARVO"
     )
     arvo_parser.add_argument("--db", default="data/arvo/arvo.db")
-    arvo_parser.add_argument("--output", default="data/arvo/processed/cases_all.jsonl")
-    arvo_parser.add_argument("--dataset-dir", default="data/arvo/processed")
+    arvo_parser.add_argument("--output", default="data/arvo/cases_all.jsonl")
+    arvo_parser.add_argument("--dataset-dir", default="data/arvo")
     arvo_parser.add_argument("--count", type=int, default=30)
+    arvo_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Process every eligible ARVO C/C++ record; allows partial results and writes failures.",
+    )
     arvo_parser.add_argument("--ids", nargs="*", type=int, default=[])
     arvo_parser.add_argument("--unique-projects", action="store_true")
     arvo_parser.add_argument("--no-balance", action="store_true")
+    arvo_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Reuse cases already present in --output and continue remaining records.",
+    )
+    arvo_parser.add_argument(
+        "--failure-log",
+        default=None,
+        help="JSONL path for records that could not be downloaded or reconstructed.",
+    )
     arvo_parser.add_argument("--seed", type=int, default=2026)
+
+    split_arvo_parser = subparsers.add_parser(
+        "split-arvo",
+        help="Build project-disjoint train/dev/test files from an existing ARVO cases JSONL",
+    )
+    split_arvo_parser.add_argument(
+        "--cases", default="data/arvo/cases_all.jsonl"
+    )
+    split_arvo_parser.add_argument("--dataset-dir", default="data/arvo")
+    split_arvo_parser.add_argument("--seed", type=int, default=2026)
     return parser
 
 
@@ -117,21 +142,48 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Wrote {args.output}")
         return 0
     if args.command == "prepare-arvo":
+        if args.all and args.ids:
+            raise ValueError("--all cannot be combined with --ids")
+        if args.all and args.unique_projects:
+            raise ValueError("--all cannot be combined with --unique-projects")
+        failure_log = args.failure_log
+        if args.all and failure_log is None:
+            failure_log = str(Path(args.dataset_dir) / "arvo_failures.jsonl")
         cases = prepare_arvo_cases(
             args.db,
             args.output,
-            count=args.count,
+            count=None if args.all else args.count,
             case_ids=args.ids,
-            unique_projects=args.unique_projects,
-            balanced=not args.no_balance,
+            unique_projects=False if args.all else args.unique_projects,
+            balanced=False if args.all else not args.no_balance,
             seed=args.seed,
+            require_routable=False if args.all else True,
+            # Full collection is intentionally resumable by default so an
+            # existing partial dataset is never discarded on a transient
+            # GitHub failure.
+            resume=args.resume or args.all,
+            failure_log=failure_log,
+            allow_partial=args.all,
         )
         manifest = prepare_arvo_training_dataset(
             cases,
             args.dataset_dir,
             seed=args.seed,
         )
-        print(f"Prepared {len(cases)} ARVO cases in {args.output}")
+        scope = "eligible ARVO records" if args.all else "ARVO cases"
+        print(f"Prepared {len(cases)} {scope} in {args.output}")
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "split-arvo":
+        cases = load_cases_jsonl(args.cases)
+        if not cases:
+            raise ValueError(f"No cases found in {args.cases}")
+        manifest = prepare_arvo_training_dataset(
+            cases,
+            args.dataset_dir,
+            seed=args.seed,
+        )
+        print(f"Split {len(cases)} ARVO cases into {args.dataset_dir}")
         print(json.dumps(manifest, ensure_ascii=False, indent=2))
         return 0
     return 1

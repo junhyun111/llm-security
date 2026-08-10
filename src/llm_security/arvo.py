@@ -15,7 +15,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from .datasets import RouterSample, write_cases_jsonl, write_router_samples_jsonl
+from .datasets import (
+    RouterSample,
+    load_cases_jsonl,
+    write_cases_jsonl,
+    write_router_samples_jsonl,
+)
 from .models import Candidate, ExpertFamily, GroundTruth, ProjectCase
 from .static_analysis import LightweightStaticAnalyzer
 
@@ -89,8 +94,12 @@ class GitHubClient:
         return json.loads(self._request(url).decode("utf-8"))
 
     def commit_patch(self, owner: str, repository: str, revision: str) -> str:
-        url = f"https://github.com/{owner}/{repository}/commit/{revision}.patch"
-        return self._request(url).decode("utf-8", errors="replace")
+        # Use the REST endpoint rather than github.com/<...>.patch so a
+        # GITHUB_TOKEN is applied to GitHub's documented API rate limit.
+        url = f"https://api.github.com/repos/{owner}/{repository}/commits/{revision}"
+        return self._request(
+            url, accept="application/vnd.github.patch"
+        ).decode("utf-8", errors="replace")
 
     def raw_file(
         self, owner: str, repository: str, revision: str, file_path: str
@@ -102,16 +111,19 @@ class GitHubClient:
         )
         return self._request(url).decode("utf-8", errors="replace")
 
-    def _request(self, url: str) -> bytes:
-        if url in self._memory_cache:
-            return self._memory_cache[url]
-        cache_path = self._cache_path(url)
+    def _request(
+        self, url: str, *, accept: str = "application/vnd.github+json"
+    ) -> bytes:
+        cache_key = f"{accept}\n{url}"
+        if cache_key in self._memory_cache:
+            return self._memory_cache[cache_key]
+        cache_path = self._cache_path(cache_key)
         if cache_path and cache_path.exists():
             payload = cache_path.read_bytes()
-            self._memory_cache[url] = payload
+            self._memory_cache[cache_key] = payload
             return payload
         headers = {
-            "Accept": "application/vnd.github+json",
+            "Accept": accept,
             "User-Agent": "llm-security-arvo-preparer",
             "X-GitHub-Api-Version": "2022-11-28",
         }
@@ -120,7 +132,7 @@ class GitHubClient:
         request = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
             payload = response.read()
-        self._memory_cache[url] = payload
+        self._memory_cache[cache_key] = payload
         if cache_path:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_bytes(payload)
@@ -137,7 +149,7 @@ def prepare_arvo_cases(
     database: str | Path,
     output: str | Path,
     *,
-    count: int = 30,
+    count: int | None = 30,
     case_ids: Iterable[int] = (),
     github_token: str | None = None,
     unique_projects: bool = False,
@@ -145,10 +157,16 @@ def prepare_arvo_cases(
     seed: int = 2026,
     cache_directory: str | Path = "data/arvo/cache/github",
     require_routable: bool = True,
+    resume: bool = False,
+    failure_log: str | Path | None = None,
+    checkpoint_every: int = 25,
+    allow_partial: bool = False,
 ) -> list[ProjectCase]:
-    if count < 1:
+    if count is not None and count < 1:
         raise ValueError("count must be positive")
+    destination = Path(output)
     records = load_arvo_records(database, case_ids=case_ids)
+    target_count = len(records) if count is None else count
     if balanced and not tuple(case_ids):
         records = balanced_records(records, seed=seed)
     client = GitHubClient(
@@ -156,41 +174,71 @@ def prepare_arvo_cases(
         cache_directory=cache_directory,
     )
     analyzer = LightweightStaticAnalyzer(max_candidates=500)
-    cases: list[ProjectCase] = []
-    selected_projects: set[str] = set()
-    failures: list[str] = []
+    cases = load_cases_jsonl(destination) if resume and destination.exists() else []
+    selected_ids = {
+        int(case.case_id.removeprefix("arvo-"))
+        for case in cases
+        if case.case_id.startswith("arvo-") and case.case_id.removeprefix("arvo-").isdigit()
+    }
+    selected_projects = {case.project_id for case in cases}
+    failures: list[dict[str, Any]] = []
+
+    def record_failure(record: ArvoRecord, reason: str) -> None:
+        failures.append({"arvo_local_id": record.local_id, "project": record.project, "reason": reason})
+
+    def checkpoint() -> None:
+        write_cases_jsonl(cases, destination)
+        if failure_log:
+            Path(failure_log).parent.mkdir(parents=True, exist_ok=True)
+            Path(failure_log).write_text(
+                "\n".join(json.dumps(item, ensure_ascii=False) for item in failures)
+                + ("\n" if failures else ""),
+                encoding="utf-8",
+            )
+
     for record in records:
-        if len(cases) >= count:
+        if len(cases) >= target_count:
             break
+        if record.local_id in selected_ids:
+            continue
         if unique_projects and record.project in selected_projects:
             continue
         try:
             case = build_case(record, client=client)
         except urllib.error.HTTPError as error:
             if error.code in {403, 429}:
+                checkpoint()
                 raise RuntimeError(
-                    "GitHub API rate limit reached. Set GITHUB_TOKEN or retry after reset."
+                    "GitHub download limit reached. Progress was checkpointed; "
+                    "set GITHUB_TOKEN if needed and rerun with --resume."
                 ) from error
-            failures.append(f"ARVO-{record.local_id}: HTTP {error.code}")
+            record_failure(record, f"HTTP {error.code}")
             continue
         except (ValueError, KeyError, urllib.error.URLError, TimeoutError) as error:
-            failures.append(f"ARVO-{record.local_id}: {error}")
+            record_failure(record, str(error))
             continue
         if case is None:
+            record_failure(record, "no eligible C/C++ source file in fix patch")
             continue
         if require_routable and not truth_candidates(case, analyzer):
-            failures.append(f"ARVO-{record.local_id}: patch location has no static candidate")
+            record_failure(record, "patch location has no static candidate")
             continue
         cases.append(case)
+        selected_ids.add(record.local_id)
         selected_projects.add(case.project_id)
-    if len(cases) < count:
-        detail = "; ".join(failures[:5])
-        raise RuntimeError(
-            f"Prepared only {len(cases)} of {count} requested ARVO cases. {detail}"
+        if checkpoint_every > 0 and len(cases) % checkpoint_every == 0:
+            checkpoint()
+            print(f"Checkpoint: {len(cases)} cases prepared.")
+    checkpoint()
+    if len(cases) < target_count and not allow_partial:
+        detail = "; ".join(
+            f"ARVO-{item['arvo_local_id']}: {item['reason']}" for item in failures[:5]
         )
-    write_cases_jsonl(cases, output)
+        raise RuntimeError(
+            f"Prepared only {len(cases)} of {target_count} requested ARVO cases. {detail}"
+        )
     if failures:
-        print(f"Skipped {len(failures)} records before collecting {len(cases)} cases.")
+        print(f"Skipped {len(failures)} records; details: {failure_log or 'not saved'}.")
     return cases
 
 

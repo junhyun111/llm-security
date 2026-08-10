@@ -1,3 +1,4 @@
+from llm_security import arvo
 from llm_security.arvo import (
     ArvoRecord,
     build_case,
@@ -7,6 +8,7 @@ from llm_security.arvo import (
     parse_git_patch,
     parse_github_repository,
     reverse_apply_patch,
+    prepare_arvo_cases,
     split_cases_by_project,
 )
 from llm_security.models import ExpertFamily, ProjectCase
@@ -109,3 +111,54 @@ def test_project_split_has_no_project_leakage() -> None:
     assert project_sets["train"].isdisjoint(project_sets["dev"])
     assert project_sets["train"].isdisjoint(project_sets["test"])
     assert project_sets["dev"].isdisjoint(project_sets["test"])
+
+
+def test_all_mode_collects_every_available_record(monkeypatch, tmp_path) -> None:
+    records = [
+        ArvoRecord(
+            local_id=index,
+            project=f"demo-{index}",
+            crash_type="Heap-buffer-overflow READ 4",
+            crash_output="",
+            severity="",
+            report="",
+            fix_commit="fixed",
+            repo_addr="https://github.com/example/demo.git",
+            patch_url="",
+            sanitizer="",
+            fuzz_target="",
+            fuzz_engine="",
+            language="c",
+        )
+        for index in (1, 2)
+    ]
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def commit_patch(self, *_args):
+            return (
+                "diff --git a/a.c b/a.c\n--- a/a.c\n+++ b/a.c\n"
+                "@@ -1,3 +1,4 @@\n int f(void) {\n+  return 0;\n"
+                "   return unsafe();\n }\n"
+            )
+
+        def raw_file(self, *_args):
+            return "int f(void) {\n  return 0;\n  return unsafe();\n}\n"
+
+    monkeypatch.setattr(arvo, "load_arvo_records", lambda *_args, **_kwargs: records)
+    monkeypatch.setattr(arvo, "GitHubClient", FakeClient)
+    destination = tmp_path / "cases.jsonl"
+
+    cases = prepare_arvo_cases(
+        "unused.db",
+        destination,
+        count=None,
+        balanced=False,
+        require_routable=False,
+        allow_partial=True,
+    )
+
+    assert [case.case_id for case in cases] == ["arvo-1", "arvo-2"]
+    assert len(destination.read_text(encoding="utf-8").splitlines()) == 2

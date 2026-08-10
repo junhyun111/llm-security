@@ -24,8 +24,8 @@ python -m llm_security.cli prepare-arvo `
   --db data\arvo\arvo.db `
   --count 60 `
   --unique-projects `
-  --output data\arvo\processed\cases_all.jsonl `
-  --dataset-dir data\arvo\processed `
+  --output data\arvo\cases_all.jsonl `
+  --dataset-dir data\arvo `
   --seed 2026
 ```
 
@@ -45,6 +45,31 @@ $env:GITHUB_TOKEN="github-token"
 
 다운로드 응답은 `data/arvo/cache/github`에 저장되어 재실행 시 재사용됩니다.
 
+### 전체 eligible ARVO 수집
+
+전체 DB 레코드가 아니라, 재현 성공·patch 위치 확인·C/C++·공개 GitHub 저장소 조건을 만족하는 **4,465개**를 대상으로 소스와 patch를 수집하려면 다음을 사용합니다. 같은 프로젝트의 여러 취약점도 포함합니다.
+
+```powershell
+python -m llm_security.cli prepare-arvo `
+  --all `
+  --db data\arvo\arvo.db `
+  --output data\arvo\cases_all.jsonl `
+  --dataset-dir data\arvo `
+  --failure-log data\arvo\arvo_failures.jsonl `
+  --seed 2026
+```
+
+작업은 25건마다 `cases_all.jsonl`을 checkpoint합니다. `--all`은 기존 `cases_all.jsonl`을 자동으로 재사용하므로 네트워크 제한이나 중단 뒤에는 같은 명령을 그대로 다시 실행하면 됩니다. GitHub에서 삭제·비공개 처리된 저장소, 적용할 수 없는 patch 등은 `arvo_failures.jsonl`에 남고 나머지 사례는 계속 저장됩니다. 전체 수집은 상당한 네트워크 시간과 디스크 공간이 필요합니다.
+
+수집이 중단된 뒤에도 이미 저장된 전체 사례만으로 분할·Router 학습 JSONL을 다시 만들 수 있습니다. 이 명령은 GitHub에 요청하지 않습니다.
+
+```powershell
+python -m llm_security.cli split-arvo `
+  --cases data\arvo\cases_all.jsonl `
+  --dataset-dir data\arvo `
+  --seed 2026
+```
+
 ## Router 학습과 평가
 
 ```powershell
@@ -57,8 +82,8 @@ CLI로 학습하려면 다음을 실행합니다. 최종 성능 확인 전에는
 
 ```powershell
 python -m llm_security.cli train-router `
-  --train data\arvo\processed\router_train.jsonl `
-  --test data\arvo\processed\router_dev.jsonl `
+  --train data\arvo\router_train.jsonl `
+  --test data\arvo\router_dev.jsonl `
   --env-file .env `
   --output models\router-arvo.pkl
 ```
@@ -87,7 +112,7 @@ python -m llm_security.cli analyze C:\path\to\cpp-project `
 ## ARVO test benchmark
 
 ```powershell
-python -m llm_security.cli run-cases data\arvo\processed\cases_test.jsonl `
+python -m llm_security.cli run-cases data\arvo\cases_test.jsonl `
   --env-file .env `
   --router-artifact models\router-arvo.pkl `
   --output experiment-arvo.json
