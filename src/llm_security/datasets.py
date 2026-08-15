@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -32,6 +32,12 @@ class UtilitySample:
     false_positive: bool = False
     unsupported_claims: int = 0
     cost: float = 0.0
+    matched_truth_ids: list[str] = field(default_factory=list)
+    ground_truth_ids: list[str] = field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    latency_seconds: float = 0.0
+    truth_labels_available: bool = False
 
     def reward(
         self,
@@ -205,6 +211,21 @@ def load_utility_samples_jsonl(path: str | Path) -> list[UtilitySample]:
                         false_positive=bool(raw.get("false_positive", False)),
                         unsupported_claims=int(raw.get("unsupported_claims", 0)),
                         cost=float(raw.get("cost", 0.0)),
+                        matched_truth_ids=[
+                            str(value) for value in raw.get("matched_truth_ids", [])
+                        ],
+                        ground_truth_ids=[
+                            str(value) for value in raw.get("ground_truth_ids", [])
+                        ],
+                        prompt_tokens=int(raw.get("prompt_tokens", 0)),
+                        completion_tokens=int(raw.get("completion_tokens", 0)),
+                        latency_seconds=float(raw.get("latency_seconds", 0.0)),
+                        truth_labels_available=bool(
+                            raw.get(
+                                "truth_labels_available",
+                                "ground_truth_ids" in raw,
+                            )
+                        ),
                     )
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
@@ -234,6 +255,12 @@ def utility_sample_to_dict(sample: UtilitySample) -> dict:
         "false_positive": sample.false_positive,
         "unsupported_claims": sample.unsupported_claims,
         "cost": sample.cost,
+        "matched_truth_ids": sample.matched_truth_ids,
+        "ground_truth_ids": sample.ground_truth_ids,
+        "prompt_tokens": sample.prompt_tokens,
+        "completion_tokens": sample.completion_tokens,
+        "latency_seconds": sample.latency_seconds,
+        "truth_labels_available": sample.truth_labels_available,
     }
 
 

@@ -40,11 +40,21 @@ def collect_expert_outcomes(
         raise ValueError("At least one Expert x model assignment is required")
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    completed: set[tuple[str, str]] = set()
+    completed: set[tuple[str, str, str]] = set()
     if resume and destination.exists():
+        existing = load_utility_samples_jsonl(destination)
+        if any(not sample.truth_labels_available for sample in existing):
+            raise ValueError(
+                "Existing outcome JSONL uses the legacy schema without truth IDs. "
+                "Rerun with --no-resume to rebuild Top2Sufficient labels."
+            )
         completed = {
-            (sample.candidate.candidate_id, sample.assignment.assignment_id)
-            for sample in load_utility_samples_jsonl(destination)
+            (
+                sample.candidate.project_id,
+                sample.candidate.candidate_id,
+                sample.assignment.assignment_id,
+            )
+            for sample in existing
         }
     elif destination.exists():
         destination.unlink()
@@ -74,7 +84,11 @@ def collect_expert_outcomes(
                 truth for truth in case.ground_truth if _candidate_matches_truth(candidate, truth)
             ]
             for assignment in jobs:
-                key = (candidate.candidate_id, assignment.assignment_id)
+                key = (
+                    candidate.project_id,
+                    candidate.candidate_id,
+                    assignment.assignment_id,
+                )
                 if key in completed:
                     skipped += 1
                     continue
@@ -102,6 +116,14 @@ def collect_expert_outcomes(
                     for finding in accepted
                     for truth in truths
                 )
+                matched_truth_ids = sorted(
+                    {
+                        truth.truth_id
+                        for finding in accepted
+                        for truth in truths
+                        if _finding_matches_truth(finding, truth)
+                    }
+                )
                 false_positive = any(
                     not any(_finding_matches_truth(finding, truth) for truth in truths)
                     for finding in accepted
@@ -114,6 +136,16 @@ def collect_expert_outcomes(
                     false_positive=false_positive,
                     unsupported_claims=rejected + len(output.errors),
                     cost=cost,
+                    matched_truth_ids=matched_truth_ids,
+                    ground_truth_ids=sorted(truth.truth_id for truth in truths),
+                    prompt_tokens=sum(item.prompt_tokens for item in output.usage),
+                    completion_tokens=sum(
+                        item.completion_tokens for item in output.usage
+                    ),
+                    latency_seconds=sum(
+                        item.latency_seconds for item in output.usage
+                    ),
+                    truth_labels_available=True,
                 )
                 with destination.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(utility_sample_to_dict(sample), ensure_ascii=False) + "\n")

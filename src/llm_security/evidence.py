@@ -118,6 +118,8 @@ _EXPERT_EVIDENCE_KINDS: dict[ExpertFamily, set[str]] = {
     ExpertFamily.MEMORY_BOUNDS: {
         "memory_sink", "memory_access", "allocation", "memory_copy",
         "memory_copy_without_guard", "unchecked_index", "guard_protects_sink",
+        "release", "use_after_release", "double_release",
+        "unchecked_nullable_dereference",
     },
     ExpertFamily.LIFETIME_RESOURCE: {
         "allocation", "release", "memory_access", "use_after_release",

@@ -21,9 +21,13 @@ from .router import (
 from .utility import (
     AssignmentStatistics,
     BudgetedUtilityRouter,
+    EscalationCalibration,
     UtilityPolicyConfig,
     UtilityRouterMetrics,
+    assert_project_disjoint,
+    split_gate_calibration_samples,
 )
+from .escalation import EscalationGate, EscalationTrainingRow
 
 __all__ = [
     "AdaptiveExpertRouter",
@@ -34,6 +38,9 @@ __all__ = [
     "BinaryRoutingModel",
     "BudgetedUtilityRouter",
     "CandidateGate",
+    "EscalationCalibration",
+    "EscalationGate",
+    "EscalationTrainingRow",
     "ExpertRoutingModel",
     "GateCalibration",
     "GateDecision",
@@ -49,4 +56,6 @@ __all__ = [
     "UtilityPolicyConfig",
     "UtilityRouterMetrics",
     "UtilityRoutingModel",
+    "assert_project_disjoint",
+    "split_gate_calibration_samples",
 ]

@@ -8,7 +8,7 @@ from .experts import BatchedExpertRunner, ExpertRunner
 from .llm import OpenRouterClient
 from .knowledge import LocalSecurityKnowledgeRetriever
 from .pipeline import VulnerabilityPipeline
-from .routing import CandidateGate, Router
+from .routing import BudgetedUtilityRouter, CandidateGate, Router
 from .static_analysis import LightweightStaticAnalyzer
 from .validation import EvidenceValidator
 
@@ -88,6 +88,8 @@ def build_batched_web_pipeline(
     """Build the web pipeline with one LLM call for all logical Experts."""
 
     client = build_openrouter_client(config)
+    if isinstance(router, BudgetedUtilityRouter):
+        router.restrict_to_model(config.model.expert_model)
     analyzer = SemanticStaticAnalyzer()
     return VulnerabilityPipeline(
         analyzer=analyzer,

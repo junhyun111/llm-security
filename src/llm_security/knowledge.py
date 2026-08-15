@@ -66,7 +66,11 @@ class LocalSecurityKnowledgeRetriever:
         for entry in self.entries:
             terms = set(entry.tags) | _tokens(entry.title) | _tokens(entry.content)
             overlap = len(query & terms)
-            family_bonus = 4.0 if expert in entry.families else 0.0
+            family_match = expert in entry.families or (
+                expert == ExpertFamily.MEMORY_SAFETY
+                and ExpertFamily.LIFETIME_RESOURCE in entry.families
+            )
+            family_bonus = 4.0 if family_match else 0.0
             score = family_bonus + float(overlap)
             if score > 0.0:
                 ranked.append((score, entry.knowledge_id, entry))

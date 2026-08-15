@@ -167,7 +167,7 @@ function renderFinding(bundle) {
   const experts = finding.supporting_experts?.length ? finding.supporting_experts : [finding.expert];
   node.querySelector('.badges').innerHTML = [
     `<span class="badge ${validation.verdict}">${validation.verdict}</span>`,
-    ...experts.map((expert) => `<span class="badge">${escapeHtml(expert)}</span>`),
+    ...experts.map((expert) => `<span class="badge">${escapeHtml(expertLabel(expert))}</span>`),
     ...(finding.cwes || []).map((cwe) => `<span class="badge">${escapeHtml(cwe)}</span>`),
   ].join('');
   node.querySelector('.evidence-block').innerHTML = `
@@ -194,6 +194,18 @@ function renderFinding(bundle) {
     patchArea.append(label);
   }
   return node;
+}
+
+function expertLabel(expert) {
+  const labels = {
+    memory_bounds: 'E1 Memory Safety',
+    lifetime_resource: 'Legacy E2 Lifetime / Resource',
+    integer_size_type: 'E3 Integer / Size / Type',
+    taint_api_contract: 'E4 Taint / API Contract',
+    control_state_error: 'E5 Control / State / Error',
+    concurrency_toctou: 'E6 Concurrency / TOCTOU',
+  };
+  return labels[expert] || expert;
 }
 
 function updateSelectionControls() {

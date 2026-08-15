@@ -12,6 +12,7 @@ from llm_security.experts import BatchedExpertRunner, ExpertRunner
 from llm_security.llm import LLMResponse
 from llm_security.knowledge import LocalSecurityKnowledgeRetriever, SecurityKnowledge
 from llm_security.models import (
+    ACTIVE_UTILITY_EXPERTS,
     Candidate,
     Evidence,
     ExpertAssignment,
@@ -81,14 +82,28 @@ def test_utility_router_learns_assignment_success_and_round_trips(tmp_path: Path
     memory_good = ExpertAssignment(ExpertFamily.MEMORY_BOUNDS, "model/good")
     memory_bad = ExpertAssignment(ExpertFamily.MEMORY_BOUNDS, "model/bad")
     control_good = ExpertAssignment(ExpertFamily.CONTROL_STATE_ERROR, "model/control")
+    integer = ExpertAssignment(ExpertFamily.INTEGER_SIZE_TYPE, "model/integer")
+    taint = ExpertAssignment(ExpertFamily.TAINT_API_CONTRACT, "model/taint")
+    concurrency = ExpertAssignment(ExpertFamily.CONCURRENCY_TOCTOU, "model/concurrency")
     rows = []
     for index in range(4):
         candidate = _candidate(f"candidate-{index}", rare=float(index % 2))
         rows.extend(
             [
-                UtilitySample(candidate, memory_good, True, cost=0.01),
-                UtilitySample(candidate, memory_bad, False, false_positive=True, cost=0.02),
-                UtilitySample(candidate, control_good, True, cost=0.01),
+                    UtilitySample(
+                        candidate,
+                        memory_good,
+                        True,
+                        cost=0.01,
+                        matched_truth_ids=[f"truth-{index}"],
+                        ground_truth_ids=[f"truth-{index}"],
+                        truth_labels_available=True,
+                    ),
+                    UtilitySample(candidate, memory_bad, False, false_positive=True, cost=0.02),
+                    UtilitySample(candidate, control_good, True, cost=0.01),
+                    UtilitySample(candidate, integer, False, cost=0.01),
+                    UtilitySample(candidate, taint, False, cost=0.01),
+                    UtilitySample(candidate, concurrency, False, cost=0.01),
             ]
         )
     path = tmp_path / "utility.jsonl"
@@ -98,7 +113,7 @@ def test_utility_router_learns_assignment_success_and_round_trips(tmp_path: Path
 
     router = BudgetedUtilityRouter.fit(
         restored_rows,
-        policy=UtilityPolicyConfig(max_assignments=2),
+        policy=UtilityPolicyConfig(escalation_threshold=0.0),
     )
     decision = router.route(_candidate("new"))
 
@@ -107,6 +122,10 @@ def test_utility_router_learns_assignment_success_and_round_trips(tmp_path: Path
         "model/control",
     }
     assert router.evaluate(restored_rows).success_coverage == 1.0
+    artifact = tmp_path / "router.pkl"
+    router.save(artifact)
+    restored = BudgetedUtilityRouter.load(artifact)
+    assert restored.route(_candidate("round-trip")).policy == "utility_top2"
 
 
 class _RecordingClient:
@@ -252,6 +271,134 @@ def test_batched_expert_runner_does_not_add_calls_when_budget_is_exceeded() -> N
     assert output.skipped_task_count == 1
 
 
+class _TwoPassClient:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def complete(self, *, model, messages, response_schema, metadata=None):
+        self.calls.append({"messages": messages, "metadata": metadata})
+        return LLMResponse(
+            data={
+                "reviewed_task_ids": [
+                    f"T{index:05d}"
+                    for index in range(1, metadata["task_count"] + 1)
+                ],
+                "expert_results": [],
+            },
+            usage=UsageRecord(model=model),
+            raw={},
+        )
+
+
+def test_batch_budget_allocates_every_top2_before_full5_extras() -> None:
+    client = _TwoPassClient()
+    first = _candidate("full5")
+    second = _candidate("top2")
+    routes = [
+        RouteDecision(
+            candidate_id=first.candidate_id,
+            scores={},
+            selected=list(ACTIVE_UTILITY_EXPERTS),
+            top1_confidence=0.4,
+            top1_top2_margin=0.1,
+            policy="utility_full5_escalation",
+            reasons=[],
+            top2_experts=list(ACTIVE_UTILITY_EXPERTS[:2]),
+            escalation_confidence=0.2,
+            escalated=True,
+        ),
+        RouteDecision(
+            candidate_id=second.candidate_id,
+            scores={},
+            selected=[
+                ExpertFamily.MEMORY_SAFETY,
+                ExpertFamily.CONTROL_STATE_ERROR,
+            ],
+            top1_confidence=0.9,
+            top1_top2_margin=0.2,
+            policy="utility_top2",
+            reasons=[],
+            escalation_confidence=0.95,
+        ),
+    ]
+
+    output = BatchedExpertRunner(
+        client,
+        "model/panel",
+        ContextBuilder(),
+        max_tasks=4,
+    ).run([first, second], routes)
+
+    assert output.task_count == 7
+    assert output.submitted_task_count == 4
+    assert output.skipped_task_count == 3
+    prompt = client.calls[0]["messages"][-1]["content"]
+    assert '"candidate_id":"full5"' in prompt
+    assert '"candidate_id":"top2"' in prompt
+    assert "taint_api_contract" not in prompt
+
+
+def test_learned_gate_uses_all_truth_coverage_and_escalates() -> None:
+    assignments = {
+        family: ExpertAssignment(family, f"model/{family.value}")
+        for family in ACTIVE_UTILITY_EXPERTS
+    }
+    train_rows = []
+    for index in range(4):
+        candidate = _candidate(f"train-{index}")
+        candidate.project_id = "train-project"
+        truth = f"train-truth-{index}"
+        for family in ACTIVE_UTILITY_EXPERTS:
+            success = family in {
+                ExpertFamily.MEMORY_SAFETY,
+                ExpertFamily.CONTROL_STATE_ERROR,
+            }
+            train_rows.append(
+                UtilitySample(
+                    candidate,
+                    assignments[family],
+                    success,
+                    cost=2.0 if family == ExpertFamily.INTEGER_SIZE_TYPE else 0.01,
+                    matched_truth_ids=[truth] if success else [],
+                    ground_truth_ids=[truth],
+                    truth_labels_available=True,
+                )
+            )
+    router = BudgetedUtilityRouter.fit(
+        train_rows,
+        policy=UtilityPolicyConfig(escalation_threshold=0.5),
+    )
+
+    gate_rows = []
+    gate_candidate = _candidate("gate")
+    gate_candidate.project_id = "gate-project"
+    for family in ACTIVE_UTILITY_EXPERTS:
+        success = family == ExpertFamily.INTEGER_SIZE_TYPE
+        gate_rows.append(
+            UtilitySample(
+                gate_candidate,
+                assignments[family],
+                success,
+                cost=2.0 if family == ExpertFamily.INTEGER_SIZE_TYPE else 0.01,
+                matched_truth_ids=["gate-truth"] if success else [],
+                ground_truth_ids=["gate-truth"],
+                truth_labels_available=True,
+            )
+        )
+
+    assert router.fit_escalation_gate(gate_rows) == 1
+    decision = router.route(gate_candidate)
+    calibration = router.calibrate_threshold(
+        gate_rows, target_truth_recall=1.0
+    )
+
+    assert decision.escalated is True
+    assert decision.escalation_method == "learned_gate"
+    assert len(decision.selected) == 5
+    assert calibration.achieved_truth_recall == 1.0
+    assert calibration.full5_rate == 1.0
+
+
 def _finding(finding_id: str, expert: ExpertFamily, model: str, line: int) -> Finding:
     return Finding(
         finding_id=finding_id,
@@ -323,6 +470,31 @@ def test_context_retrieves_family_specific_security_knowledge() -> None:
     )
     assert "CWE-416" in context.knowledge_text
     assert "CWE-362" not in context.knowledge_text
+
+
+def test_e1_temporal_finding_is_not_rejected_by_unrelated_bounds_guard() -> None:
+    candidate = _candidate("e1-uaf", rare=1.0)
+    candidate.evidence.append(
+        Evidence(
+            "E2",
+            "guard_protects_sink",
+            "x.c",
+            2,
+            "if (n < cap)",
+            "f",
+            facts={"semantically_protective": True, "sink_line": 2},
+        )
+    )
+    finding = _finding(
+        "uaf-finding", ExpertFamily.MEMORY_SAFETY, "model/expert", 2
+    )
+    finding.candidate_id = candidate.candidate_id
+    finding.evidence_ids = ["E1"]
+
+    result = EvidenceValidator().validate(finding, candidate)
+
+    assert result.checks["contradicting_guard"] is False
+    assert result.verdict == ValidationVerdict.VALIDATED
 
 
 class _CascadeClient:

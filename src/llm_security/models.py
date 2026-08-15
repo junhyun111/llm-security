@@ -7,11 +7,25 @@ from typing import Any
 
 class ExpertFamily(str, Enum):
     MEMORY_BOUNDS = "memory_bounds"
+    # The Utility Router treats the historical ``memory_bounds`` identifier as
+    # the broader E1 Memory Safety Expert.  Keeping the serialized value makes
+    # old ARVO rows and AnchorRare artifacts readable while E1 also covers the
+    # former lifetime/resource checks.
+    MEMORY_SAFETY = "memory_bounds"
     LIFETIME_RESOURCE = "lifetime_resource"
     INTEGER_SIZE_TYPE = "integer_size_type"
     TAINT_API_CONTRACT = "taint_api_contract"
     CONTROL_STATE_ERROR = "control_state_error"
     CONCURRENCY_TOCTOU = "concurrency_toctou"
+
+
+ACTIVE_UTILITY_EXPERTS: tuple[ExpertFamily, ...] = (
+    ExpertFamily.MEMORY_SAFETY,
+    ExpertFamily.INTEGER_SIZE_TYPE,
+    ExpertFamily.TAINT_API_CONTRACT,
+    ExpertFamily.CONTROL_STATE_ERROR,
+    ExpertFamily.CONCURRENCY_TOCTOU,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +34,7 @@ class ExpertAssignment:
 
     expert: ExpertFamily
     model_id: str
-    prompt_version: str = "expert-v2"
+    prompt_version: str = "expert-v3-five-expert"
     expected_cost: float = 0.0
 
     @property
@@ -143,6 +157,11 @@ class RouteDecision:
     trigger_scores: dict[ExpertFamily, float] = field(default_factory=dict)
     assignments: list[ExpertAssignment] = field(default_factory=list)
     expected_cost: float = 0.0
+    ranked_experts: list[ExpertFamily] = field(default_factory=list)
+    top2_experts: list[ExpertFamily] = field(default_factory=list)
+    escalation_confidence: float | None = None
+    escalated: bool = False
+    escalation_method: str | None = None
 
 
 @dataclass(slots=True)

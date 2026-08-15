@@ -135,6 +135,28 @@ class EvidenceValidator:
     @staticmethod
     def _has_contradicting_guard(finding: Finding, candidate: Candidate) -> bool:
         if finding.expert == ExpertFamily.MEMORY_BOUNDS:
+            cited_kinds = {
+                evidence.kind
+                for evidence in candidate.evidence
+                if evidence.evidence_id in finding.evidence_ids
+            }
+            temporal_kinds = {
+                "release",
+                "use_after_release",
+                "double_release",
+                "unchecked_nullable_dereference",
+            }
+            spatial_kinds = {
+                "memory_sink",
+                "memory_copy",
+                "memory_copy_without_guard",
+                "unchecked_index",
+            }
+            # E1 now includes temporal memory safety. A bounds guard cannot
+            # falsify a UAF/double-free hypothesis merely because both facts
+            # occur in the same candidate function.
+            if cited_kinds & temporal_kinds and not cited_kinds & spatial_kinds:
+                return False
             if candidate.feature_schema_version == "semantic-v1":
                 return any(
                     evidence.kind == "guard_protects_sink"

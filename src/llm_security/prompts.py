@@ -10,8 +10,10 @@ from .models import Candidate, ExpertFamily, Finding
 
 EXPERT_PROMPTS: dict[ExpertFamily, str] = {
     ExpertFamily.MEMORY_BOUNDS: (
-        "Analyze spatial memory safety only: buffer capacity, index, copy length, "
-        "pointer arithmetic, and bounds guards. Do not report speculative issues."
+        "Act as E1 Memory Safety. Analyze spatial and temporal memory safety: buffer "
+        "capacity, indices, copy lengths, pointer arithmetic, bounds guards, ownership, "
+        "use-after-free, double/invalid free, nullable dereferences, and cleanup paths. "
+        "Do not report speculative issues."
     ),
     ExpertFamily.LIFETIME_RESOURCE: (
         "Analyze allocation, ownership, release, aliases, use-after-free, double free, "
@@ -170,6 +172,11 @@ def batched_expert_messages(candidate_packets: list[dict[str, Any]]) -> list[dic
     the original Expert assignment without requiring separate API calls.
     """
 
+    requested_experts = {
+        ExpertFamily(task["expert"])
+        for packet in candidate_packets
+        for task in packet.get("expert_tasks", [])
+    }
     system = (
         "You are a panel of independent C/C++ security specialists. Execute every "
         "expert task in the supplied packets and keep each task's scope separate. "
@@ -181,8 +188,9 @@ def batched_expert_messages(candidate_packets: list[dict[str, Any]]) -> list[dic
         "means the reviewed task found nothing.\n\n"
         "Expert checklists:\n"
         + "\n".join(
-            f"- {family.value}: {instruction}"
+            f"- {_expert_display_name(family)} ({family.value}): {instruction}"
             for family, instruction in EXPERT_PROMPTS.items()
+            if family in requested_experts
         )
     )
     user = (
@@ -194,6 +202,18 @@ def batched_expert_messages(candidate_packets: list[dict[str, Any]]) -> list[dic
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def _expert_display_name(family: ExpertFamily) -> str:
+    names = {
+        ExpertFamily.MEMORY_BOUNDS: "E1 Memory Safety",
+        ExpertFamily.LIFETIME_RESOURCE: "Legacy E2 Lifetime / Resource",
+        ExpertFamily.INTEGER_SIZE_TYPE: "E3 Integer / Size / Type",
+        ExpertFamily.TAINT_API_CONTRACT: "E4 Taint / API Contract",
+        ExpertFamily.CONTROL_STATE_ERROR: "E5 Control / State / Error",
+        ExpertFamily.CONCURRENCY_TOCTOU: "E6 Concurrency / TOCTOU",
+    }
+    return names[family]
+
+
 def finding_from_payload(
     payload: dict[str, Any],
     *,
@@ -201,7 +221,7 @@ def finding_from_payload(
     candidate: Candidate,
     expert: ExpertFamily,
     model_id: str | None = None,
-    prompt_version: str = "expert-v2",
+    prompt_version: str = "expert-v3-five-expert",
 ) -> Finding:
     model_tag = (
         hashlib.sha256(model_id.encode("utf-8")).hexdigest()[:8]

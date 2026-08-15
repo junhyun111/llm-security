@@ -18,9 +18,11 @@ def test_router_training_notebook_is_valid_and_offline():
     assert "data' / 'phase2e" in code
     assert "artifacts' / 'phase2e" in code
     assert "router_anchor_rare_v1.pkl" in code
-    assert "router_utility_v1.pkl" in code
+    assert "router_top2_full5_v2.pkl" in code
     assert "AnchorRareRouter.fit" in code
     assert "BudgetedUtilityRouter.fit" in code
+    assert "fit_escalation_gate" in code
+    assert "calibrate_threshold" in code
     assert "OPENROUTER" not in code.upper()
 
 
@@ -42,7 +44,7 @@ def test_evaluation_and_agent_notebooks_are_valid_and_separated():
         for index, cell in enumerate(notebook["cells"]):
             if cell["cell_type"] == "code":
                 compile("".join(cell.get("source", [])), f"notebook-cell-{index}", "exec")
-    assert "BudgetedUtilityRouter.evaluate" not in evaluation_code
+    assert "evaluate_baselines" in evaluation_code
     assert ".evaluate(" in evaluation_code
     assert "build_pipeline" not in evaluation_code
     assert "build_pipeline" in agent_code

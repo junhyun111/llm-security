@@ -19,7 +19,7 @@
 ```dotenv
 OPENROUTER_API_KEY=your-key
 RUN_PAID_EXPERIMENTS=1
-WEB_ROUTER_ARTIFACT=artifacts/phase2e/router_anchor_rare_v1.pkl
+WEB_ROUTER_ARTIFACT=artifacts/phase2e/router_top2_full5_v2.pkl
 WEB_HOST=127.0.0.1
 WEB_PORT=8000
 WEB_CANDIDATE_GATE_ENABLED=true
@@ -65,11 +65,13 @@ docker compose -f compose.web.yml up --build
 
 ## 새 Router 구조와 실행 순서
 
-현재 기본 학습 구조는 single-label Softmax 분류가 아닙니다. `memory_bounds`와
-`control_state_error`를 공통 Anchor로 실행하고, 나머지 Expert가 필요한지만 독립
-binary trigger로 학습합니다. 실제 LLM 결과를 모은 뒤에는
-`P(Expert×Model succeeds | candidate)`를 예측하는 Utility Router로 전환할 수 있습니다.
-기존 `AdaptiveExpertRouter`는 비교 baseline으로만 보존됩니다.
+최종 Router는 `Adaptive Top-2 / Full-5 Escalation` 정책입니다. E1 Memory Safety는
+기존 bounds와 lifetime 검사를 합치며, E3 Integer/Size/Type, E4 Taint/API Contract,
+E5 Control/State/Error, E6 Concurrency/TOCTOU와 함께 5개 Expert를 사용합니다. 각
+`Expert×Model`의 성공 확률을 독립적으로 학습하고, 오탐·근거 없는 주장·실측 비용을
+뺀 Utility로 Expert별 최적 모델을 하나씩 고른 뒤 순위를 정합니다. 정상 경로는
+Top-2이고, 학습된 Escalation Gate의 Top2Sufficient 확률이 보정 threshold보다 낮으면
+Full-5로 확장합니다. 기존 AnchorRare는 baseline과 새 artifact 부재 시 fallback입니다.
 
 1. semantic Candidate JSONL 준비(이미 있으면 생략):
 
@@ -81,7 +83,7 @@ python -m llm_security.cli phase2e-prepare `
   --seed 2026
 ```
 
-2. API 없이 Anchor/Rare Router 학습:
+2. 선택 사항: API 없이 Anchor/Rare baseline 학습:
 
 ```powershell
 python -m llm_security.cli train-anchor-router `
@@ -89,8 +91,6 @@ python -m llm_security.cli train-anchor-router `
   --dev data\phase2e\semantic\router_dev.jsonl `
   --output artifacts\phase2e\router_anchor_rare_v1.pkl
 ```
-
-같은 작업은 `notebooks/01_train_router.ipynb`를 위에서 아래로 실행해도 됩니다.
 
 3. Utility Router용 Expert×Model 성능 행렬 수집:
 
@@ -105,7 +105,7 @@ python -m llm_security.cli collect-utility-outcomes `
   --max-cases 5
 ```
 
-검증 데이터도 별도로 수집합니다.
+검증과 최종 test 데이터도 프로젝트가 겹치지 않게 별도로 수집합니다.
 
 ```powershell
 python -m llm_security.cli collect-utility-outcomes `
@@ -114,11 +114,19 @@ python -m llm_security.cli collect-utility-outcomes `
   --max-cases 5
 ```
 
+```powershell
+python -m llm_security.cli collect-utility-outcomes `
+  --cases data\phase2e\cases_test.jsonl `
+  --output data\utility\outcomes_test.jsonl `
+  --max-cases 5
+```
+
 모델 후보는 `OPENROUTER_SWEEP_MODELS` 또는 `--models model/a,model/b`로 지정합니다.
-Expert별 운영 모델은 `OPENROUTER_MEMORY_MODEL`, `OPENROUTER_LIFETIME_MODEL`,
-`OPENROUTER_INTEGER_MODEL`, `OPENROUTER_TAINT_MODEL`, `OPENROUTER_CONTROL_MODEL`,
+Expert별 운영 모델은 `OPENROUTER_MEMORY_MODEL`, `OPENROUTER_INTEGER_MODEL`,
+`OPENROUTER_TAINT_MODEL`, `OPENROUTER_CONTROL_MODEL`,
 `OPENROUTER_CONCURRENCY_MODEL`로 독립 설정하며, 생략하면
-`OPENROUTER_EXPERT_MODEL`을 사용합니다.
+`OPENROUTER_EXPERT_MODEL`을 사용합니다. `OPENROUTER_LIFETIME_MODEL`은 기존
+AnchorRare 실행 호환용입니다.
 
 4. 수집된 실제 outcome으로 Utility Router 학습:
 
@@ -126,12 +134,26 @@ Expert별 운영 모델은 `OPENROUTER_MEMORY_MODEL`, `OPENROUTER_LIFETIME_MODEL
 python -m llm_security.cli train-utility-router `
   --train data\utility\outcomes_train.jsonl `
   --dev data\utility\outcomes_dev.jsonl `
-  --output artifacts\phase2e\router_utility_v1.pkl
+  --target-truth-recall 0.95 `
+  --output artifacts\phase2e\router_top2_full5_v2.pkl
 ```
 
-`notebooks/02_evaluate_router.ipynb`는 test split의 rare recall, 실제 success
-coverage, 평균 Expert 수, 비용과 regret을 평가합니다. `03_run_agents.ipynb`는 Utility
-artifact가 있으면 그것을 우선 사용하고, 없으면 Anchor/Rare artifact로 실행합니다.
+`--gate-train`을 생략하면 dev 프로젝트를 절반씩 나눠 한쪽으로 Escalation Gate를
+학습하고 다른 쪽으로 recall 제약하에서 최소 비용 threshold를 고릅니다. test는 이
+명령에서 읽지 않습니다. 학습 완료 후 test는 한 번만 평가합니다.
+
+```powershell
+python -m llm_security.cli evaluate-utility-router `
+  --artifact artifacts\phase2e\router_top2_full5_v2.pkl `
+  --anchor-artifact artifacts\phase2e\router_anchor_rare_v1.pkl `
+  --test data\utility\outcomes_test.jsonl `
+  --output results\utility_test.json
+```
+
+평가 보고서는 Full-5, 고정 E1+E3, Utility Top-2, 독립확률 escalation, 학습 gate를
+같이 비교하고 truth recall, exact coverage, 평균 Expert 수, Full-5 비율, token·비용,
+latency, Brier/ECE를 기록합니다. 웹에서는 후보별 논리 Expert 수만 달라지고 실제
+탐지 API 요청은 계속 프로젝트당 한 번입니다.
 
 C/C++ 오픈소스에서 정적 분석으로 취약 후보 함수를 찾고, 학습된 Router가 후보별 Expert를 선택한 뒤 OpenRouter LLM으로 분석하는 실험용 파이프라인입니다.
 

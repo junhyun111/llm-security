@@ -39,7 +39,7 @@ class ExpertRunner:
         model: str,
         context_builder: ContextBuilder,
         models_by_family: dict[ExpertFamily, str] | None = None,
-        prompt_version: str = "expert-v2",
+        prompt_version: str = "expert-v3-five-expert",
     ) -> None:
         self.client = client
         self.model = model
@@ -120,7 +120,7 @@ class BatchedExpertRunner:
     which guarantees at most one successful detection completion per run.
     """
 
-    prompt_version = "batched-expert-v1"
+    prompt_version = "batched-expert-v2-five-expert"
 
     def __init__(
         self,
@@ -148,37 +148,80 @@ class BatchedExpertRunner:
     ) -> ExpertRunOutput:
         by_id = {candidate.candidate_id: candidate for candidate in candidates}
         routes_by_id = {route.candidate_id: route for route in routes}
-        packets: list[dict[str, Any]] = []
-        task_lookup: dict[str, tuple[Candidate, ExpertFamily]] = {}
         skipped = 0
-        task_count = 0
-
+        desired: dict[str, list[ExpertFamily]] = {}
         for candidate in candidates:
             route = routes_by_id[candidate.candidate_id]
-            experts = list(
+            desired[candidate.candidate_id] = list(
                 dict.fromkeys(
                     assignment.expert for assignment in route.assignments
                 )
             ) or list(dict.fromkeys(route.selected))
-            task_count += len(experts)
-            if len(task_lookup) + len(experts) > self.max_tasks:
+        task_count = sum(len(experts) for experts in desired.values())
+
+        # Two-pass project budget: reserve every candidate's Top-2 work before
+        # spending tasks on any Full-5 escalation extras.  Escalation extras are
+        # then ordered by lowest sufficiency confidence and highest static
+        # suspicion so an early Full-5 candidate cannot starve later Top-2 work.
+        allocations: dict[str, list[ExpertFamily]] = {
+            candidate.candidate_id: [] for candidate in candidates
+        }
+        candidate_order = sorted(
+            enumerate(candidates),
+            key=lambda item: (-item[1].suspicion_score, item[0]),
+        )
+        base_chunks = [
+            (candidate, desired[candidate.candidate_id][:2])
+            for _, candidate in candidate_order
+            if desired[candidate.candidate_id]
+        ]
+        extra_chunks = sorted(
+            [
+                (candidate, [expert])
+                for candidate in candidates
+                for expert in desired[candidate.candidate_id][2:]
+            ],
+            key=lambda item: (
+                routes_by_id[item[0].candidate_id].escalation_confidence
+                if routes_by_id[item[0].candidate_id].escalation_confidence is not None
+                else 1.0,
+                -item[0].suspicion_score,
+                item[0].candidate_id,
+                item[1][0].value,
+            ),
+        )
+        for candidate, experts in [*base_chunks, *extra_chunks]:
+            if not experts:
+                continue
+            # Never submit escalation extras when that candidate's Top-2 pair
+            # could not be admitted to the shared request.
+            if experts[0] in desired[candidate.candidate_id][2:] and len(
+                allocations[candidate.candidate_id]
+            ) < min(2, len(desired[candidate.candidate_id])):
                 skipped += len(experts)
                 continue
-            packet, packet_tasks = self._candidate_packet(
-                candidate,
-                experts,
-                start_index=len(task_lookup) + skipped + 1,
+            proposed = {
+                candidate_id: list(selected)
+                for candidate_id, selected in allocations.items()
+            }
+            proposed[candidate.candidate_id].extend(experts)
+            proposed_count = sum(len(selected) for selected in proposed.values())
+            if proposed_count > self.max_tasks:
+                skipped += len(experts)
+                continue
+            proposed_packets, proposed_lookup = self._build_packets(
+                candidates, proposed
             )
-            proposed = [*packets, packet]
             prompt_size = sum(
                 len(message["content"])
-                for message in batched_expert_messages(proposed)
+                for message in batched_expert_messages(proposed_packets)
             )
             if prompt_size > self.max_batch_characters:
-                skipped += len(packet_tasks)
+                skipped += len(experts)
                 continue
-            packets.append(packet)
-            task_lookup.update(packet_tasks)
+            allocations = proposed
+
+        packets, task_lookup = self._build_packets(candidates, allocations)
 
         if not task_lookup:
             errors = []
@@ -270,6 +313,26 @@ class BatchedExpertRunner:
             submitted_task_count=len(task_lookup),
             skipped_task_count=skipped,
         )
+
+    def _build_packets(
+        self,
+        candidates: list[Candidate],
+        allocations: dict[str, list[ExpertFamily]],
+    ) -> tuple[list[dict[str, Any]], dict[str, tuple[Candidate, ExpertFamily]]]:
+        packets: list[dict[str, Any]] = []
+        lookup: dict[str, tuple[Candidate, ExpertFamily]] = {}
+        for candidate in candidates:
+            experts = allocations.get(candidate.candidate_id, [])
+            if not experts:
+                continue
+            packet, packet_tasks = self._candidate_packet(
+                candidate,
+                experts,
+                start_index=len(lookup) + 1,
+            )
+            packets.append(packet)
+            lookup.update(packet_tasks)
+        return packets, lookup
 
     def _candidate_packet(
         self,

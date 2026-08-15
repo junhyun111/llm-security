@@ -25,13 +25,21 @@ from .experiments import (
     run_phase2e_jsonl,
 )
 from .factory import build_context_builder, build_openrouter_client, build_pipeline
-from .models import ExpertAssignment, ExpertFamily, ProjectCase, to_dict
+from .models import (
+    ACTIVE_UTILITY_EXPERTS,
+    ExpertAssignment,
+    ExpertFamily,
+    ProjectCase,
+    to_dict,
+)
 from .routing import (
     AdaptiveExpertRouter,
     AnchorRareRouter,
     BudgetedUtilityRouter,
     RoutingPolicyConfig,
     UtilityPolicyConfig,
+    assert_project_disjoint,
+    split_gate_calibration_samples,
 )
 
 
@@ -71,14 +79,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     utility_parser.add_argument("--train", required=True)
     utility_parser.add_argument("--dev", required=True)
+    utility_parser.add_argument(
+        "--gate-train",
+        default=None,
+        help=(
+            "Optional project-disjoint outcome JSONL for Escalation Gate fitting. "
+            "When omitted, --dev is split by project into gate/calibration halves."
+        ),
+    )
     utility_parser.add_argument("--env-file", default=".env")
-    utility_parser.add_argument("--max-assignments", type=int, default=3)
-    utility_parser.add_argument("--max-expected-cost", type=float, default=0.0)
-    utility_parser.add_argument("--min-success-probability", type=float, default=0.20)
+    utility_parser.add_argument("--escalation-threshold", type=float, default=0.85)
+    utility_parser.add_argument("--target-truth-recall", type=float, default=0.95)
+    utility_parser.add_argument("--gate-fraction", type=float, default=0.50)
     utility_parser.add_argument("--cost-weight", type=float, default=1.0)
     utility_parser.add_argument("--false-positive-weight", type=float, default=0.50)
     utility_parser.add_argument("--unsupported-weight", type=float, default=0.25)
-    utility_parser.add_argument("--output", default="models/router-utility.pkl")
+    utility_parser.add_argument(
+        "--output", default="artifacts/phase2e/router_top2_full5_v2.pkl"
+    )
+
+    evaluate_utility_parser = subparsers.add_parser(
+        "evaluate-utility-router",
+        help="Evaluate a frozen Top-2/Full-5 Router once on an outcome test split",
+    )
+    evaluate_utility_parser.add_argument("--artifact", required=True)
+    evaluate_utility_parser.add_argument("--test", required=True)
+    evaluate_utility_parser.add_argument(
+        "--anchor-artifact",
+        default="",
+        help="Optional AnchorRare baseline artifact evaluated on the same candidates",
+    )
+    evaluate_utility_parser.add_argument("--output", default="")
 
     collect_parser = subparsers.add_parser(
         "collect-utility-outcomes",
@@ -94,8 +125,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     collect_parser.add_argument(
         "--families",
-        default=",".join(family.value for family in ExpertFamily),
-        help="Comma-separated Expert families",
+        default=",".join(family.value for family in ACTIVE_UTILITY_EXPERTS),
+        help="Comma-separated active Expert families (E1/E3/E4/E5/E6)",
     )
     collect_parser.add_argument("--max-cases", type=int, default=0)
     collect_parser.add_argument("--max-candidates-per-case", type=int, default=4)
@@ -241,21 +272,88 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "train-utility-router":
         config = AppConfig.from_env(args.env_file)
         policy = UtilityPolicyConfig(
-            max_assignments=args.max_assignments,
-            max_expected_cost=args.max_expected_cost,
-            minimum_success_probability=args.min_success_probability,
+            escalation_threshold=args.escalation_threshold,
             cost_weight=args.cost_weight,
             false_positive_weight=args.false_positive_weight,
             unsupported_weight=args.unsupported_weight,
         )
+        train_rows = load_utility_samples_jsonl(args.train)
+        dev_rows = load_utility_samples_jsonl(args.dev)
+        assert_project_disjoint(
+            train_rows,
+            dev_rows,
+            first_name="train",
+            second_name="dev",
+        )
         router = BudgetedUtilityRouter.fit(
-            load_utility_samples_jsonl(args.train),
+            train_rows,
             policy=policy,
             seed=config.runtime.seed,
         )
-        metrics = router.evaluate(load_utility_samples_jsonl(args.dev))
+        if args.gate_train:
+            gate_rows = load_utility_samples_jsonl(args.gate_train)
+            calibration_rows = dev_rows
+            assert_project_disjoint(
+                train_rows,
+                gate_rows,
+                first_name="train",
+                second_name="gate-train",
+            )
+            assert_project_disjoint(
+                gate_rows,
+                calibration_rows,
+                first_name="gate-train",
+                second_name="dev",
+            )
+        else:
+            gate_rows, calibration_rows = split_gate_calibration_samples(
+                dev_rows,
+                seed=config.runtime.seed,
+                gate_fraction=args.gate_fraction,
+            )
+        gate_sample_count = router.fit_escalation_gate(
+            gate_rows, seed=config.runtime.seed
+        )
+        calibration = router.calibrate_threshold(
+            calibration_rows,
+            target_truth_recall=args.target_truth_recall,
+        )
+        metrics = router.evaluate(calibration_rows)
         router.save(args.output)
-        print(json.dumps({"metrics": to_dict(metrics)}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "artifact": args.output,
+                    "gate_training_candidates": gate_sample_count,
+                    "calibration": to_dict(calibration),
+                    "calibration_metrics": to_dict(metrics),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "evaluate-utility-router":
+        router = BudgetedUtilityRouter.load(args.artifact)
+        test_rows = load_utility_samples_jsonl(args.test)
+        anchor_router = (
+            AnchorRareRouter.load(args.anchor_artifact)
+            if args.anchor_artifact
+            else None
+        )
+        report = {
+            "artifact": args.artifact,
+            "test": args.test,
+            "policies": to_dict(
+                router.evaluate_baselines(test_rows, anchor_router=anchor_router)
+            ),
+        }
+        payload = json.dumps(report, ensure_ascii=False, indent=2)
+        if args.output:
+            destination = Path(args.output)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(payload, encoding="utf-8")
+        print(payload)
         return 0
     if args.command == "collect-utility-outcomes":
         config = AppConfig.from_env(args.env_file)
@@ -271,7 +369,10 @@ def main(argv: list[str] | None = None) -> int:
             item.strip() for item in args.models.split(",") if item.strip()
         )
         model_pool = explicit_models or config.model.sweep_models or tuple(
-            dict.fromkeys(config.model.expert_models.values())
+            dict.fromkeys(
+                config.model.expert_models[family]
+                for family in ACTIVE_UTILITY_EXPERTS
+            )
         )
         assignments = [
             ExpertAssignment(family, model_id)
