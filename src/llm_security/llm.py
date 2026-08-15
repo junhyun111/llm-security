@@ -128,7 +128,16 @@ class OpenRouterClient:
                         for part in content
                     )
                 if isinstance(content, str):
-                    data = _decode_json_content(content)
+                    try:
+                        data = _decode_json_content(content)
+                    except json.JSONDecodeError as error:
+                        finish_reason = raw["choices"][0].get("finish_reason", "unknown")
+                        raise RuntimeError(
+                            "Model returned incomplete or invalid JSON "
+                            f"(finish_reason={finish_reason}, content_characters="
+                            f"{len(content)}). Increase the output-token budget or reduce "
+                            "WEB_DETECTION_MAX_EXPERT_TASKS."
+                        ) from error
                 elif isinstance(content, dict):
                     data = content
                 else:

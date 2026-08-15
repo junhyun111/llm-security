@@ -69,6 +69,7 @@ class WebSettings:
     candidate_gate_enabled: bool = True
     detection_max_prompt_characters: int = 120_000
     detection_max_expert_tasks: int = 24
+    detection_max_output_tokens: int = 8_192
     patch_max_prompt_characters: int = 120_000
     env_file: Path = Path(".env")
 
@@ -103,6 +104,9 @@ class WebSettings:
             ),
             detection_max_expert_tasks=int(
                 values.get("WEB_DETECTION_MAX_EXPERT_TASKS", "24")
+            ),
+            detection_max_output_tokens=int(
+                values.get("WEB_DETECTION_MAX_OUTPUT_TOKENS", "8192")
             ),
             patch_max_prompt_characters=int(
                 values.get("WEB_PATCH_MAX_PROMPT_CHARACTERS", "120000")
@@ -546,6 +550,7 @@ class WebJobService:
             )
         config.analysis.backend = "semantic"
         config.candidate_gate.enabled = self.settings.candidate_gate_enabled
+        config.model.max_output_tokens = self.settings.detection_max_output_tokens
         # One logical detection call must also mean one physical HTTP attempt.
         config.runtime.max_retries = 0
         progress(20, "Loading C/C++ source files")

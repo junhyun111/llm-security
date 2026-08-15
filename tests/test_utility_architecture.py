@@ -155,6 +155,7 @@ class _BatchRecordingClient:
         )
         return LLMResponse(
             data={
+                "reviewed_task_ids": ["T00001", "T00002", "T00003"],
                 "expert_results": [
                     {
                         "task_id": "T00001",

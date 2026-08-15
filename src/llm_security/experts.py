@@ -209,6 +209,22 @@ class BatchedExpertRunner:
         findings: list[Finding] = []
         errors: list[str] = []
         seen: set[str] = set()
+        reviewed = {
+            str(task_id)
+            for task_id in response.data.get("reviewed_task_ids", [])
+        }
+        unknown_reviewed = sorted(reviewed - set(task_lookup))
+        if unknown_reviewed:
+            errors.append(
+                "Model returned unknown reviewed task IDs: "
+                + ", ".join(unknown_reviewed)
+            )
+        missing_reviews = sorted(set(task_lookup) - reviewed)
+        if missing_reviews:
+            errors.append(
+                "Model did not confirm review of Expert tasks: "
+                + ", ".join(missing_reviews)
+            )
         payloads = response.data.get("expert_results", [])
         if not isinstance(payloads, list):
             raise TypeError("The model response 'expert_results' field must be a list")
@@ -218,6 +234,8 @@ class BatchedExpertRunner:
                 if task_id in seen:
                     raise ValueError(f"Duplicate Expert result: {task_id}")
                 seen.add(task_id)
+                if task_id not in reviewed:
+                    raise ValueError(f"Unreviewed Expert result: {task_id}")
                 candidate, expert = task_lookup[task_id]
                 if str(payload["candidate_id"]) != candidate.candidate_id:
                     raise ValueError(f"Candidate mismatch for {task_id}")
@@ -239,11 +257,6 @@ class BatchedExpertRunner:
                     )
             except (KeyError, TypeError, ValueError) as error:
                 errors.append(str(error))
-        missing = sorted(set(task_lookup) - seen)
-        if missing:
-            errors.append(
-                "Model omitted Expert task results: " + ", ".join(missing)
-            )
         if skipped:
             errors.append(
                 f"Skipped {skipped} Expert tasks because the batch prompt exceeded "
