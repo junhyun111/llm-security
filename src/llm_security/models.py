@@ -206,6 +206,9 @@ class PipelineResult:
     pre_gate_candidates: list[Candidate] = field(default_factory=list)
     gate_decisions: list[Any] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    expert_task_count: int = 0
+    submitted_expert_task_count: int = 0
+    skipped_expert_task_count: int = 0
 
     @property
     def validated_findings(self) -> list[Finding]:

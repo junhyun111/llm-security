@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .patching import PatchProposal
+from .patching import BatchPatchProposal, PatchProposal
 
 
 @dataclass(slots=True)
@@ -41,7 +41,7 @@ class TemporaryPatchVerifier:
     def verify(
         self,
         source_project: str | Path,
-        proposal: PatchProposal,
+        proposal: PatchProposal | BatchPatchProposal,
         commands: list[VerificationCommand],
     ) -> VerificationReport:
         source = Path(source_project).resolve()
@@ -57,7 +57,8 @@ class TemporaryPatchVerifier:
             workspace = Path(temp) / "project"
             shutil.copytree(source, workspace, symlinks=False)
             patch_file = Path(temp) / "proposal.diff"
-            patch_file.write_text(proposal.unified_diff, encoding="utf-8")
+            with patch_file.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(proposal.unified_diff)
             apply_check = self._run(
                 VerificationCommand(
                     name="patch-check",
@@ -123,4 +124,3 @@ class TemporaryPatchVerifier:
                 stderr=f"Timed out after {command.timeout_seconds} seconds",
                 elapsed_seconds=time.perf_counter() - started,
             )
-

@@ -8,7 +8,7 @@ from llm_security.datasets import (
     write_utility_samples_jsonl,
 )
 from llm_security.evidence import ContextBuilder
-from llm_security.experts import ExpertRunner
+from llm_security.experts import BatchedExpertRunner, ExpertRunner
 from llm_security.llm import LLMResponse
 from llm_security.knowledge import LocalSecurityKnowledgeRetriever, SecurityKnowledge
 from llm_security.models import (
@@ -138,6 +138,117 @@ def test_expert_runner_uses_route_assignment_model() -> None:
     )
     ExpertRunner(client, "model/default", ContextBuilder()).run([candidate], [route])
     assert client.models == ["model/specialist"]
+
+
+class _BatchRecordingClient:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def complete(self, *, model, messages, response_schema, metadata=None):
+        self.calls.append(
+            {
+                "model": model,
+                "messages": messages,
+                "schema": response_schema,
+                "metadata": metadata,
+            }
+        )
+        return LLMResponse(
+            data={
+                "expert_results": [
+                    {
+                        "task_id": "T00001",
+                        "candidate_id": "batch-1",
+                        "expert": "memory_bounds",
+                        "findings": [],
+                    },
+                    {
+                        "task_id": "T00002",
+                        "candidate_id": "batch-1",
+                        "expert": "control_state_error",
+                        "findings": [],
+                    },
+                    {
+                        "task_id": "T00003",
+                        "candidate_id": "batch-2",
+                        "expert": "lifetime_resource",
+                        "findings": [],
+                    },
+                ]
+            },
+            usage=UsageRecord(model=model, prompt_tokens=100),
+            raw={},
+        )
+
+
+def test_batched_expert_runner_keeps_experts_but_calls_llm_once() -> None:
+    client = _BatchRecordingClient()
+    first = _candidate("batch-1")
+    second = _candidate("batch-2", rare=1.0)
+    routes = [
+        RouteDecision(
+            candidate_id=first.candidate_id,
+            scores={},
+            selected=[
+                ExpertFamily.MEMORY_BOUNDS,
+                ExpertFamily.CONTROL_STATE_ERROR,
+            ],
+            top1_confidence=1.0,
+            top1_top2_margin=1.0,
+            policy="test",
+            reasons=[],
+        ),
+        RouteDecision(
+            candidate_id=second.candidate_id,
+            scores={},
+            selected=[ExpertFamily.LIFETIME_RESOURCE],
+            top1_confidence=1.0,
+            top1_top2_margin=1.0,
+            policy="test",
+            reasons=[],
+        ),
+    ]
+
+    output = BatchedExpertRunner(
+        client,
+        "model/panel",
+        ContextBuilder(),
+    ).run([first, second], routes)
+
+    assert len(client.calls) == 1
+    assert output.task_count == 3
+    assert output.submitted_task_count == 3
+    assert output.skipped_task_count == 0
+    assert output.usage == [UsageRecord(model="model/panel", prompt_tokens=100)]
+    prompt = client.calls[0]["messages"][-1]["content"]
+    assert "memory_bounds" in prompt
+    assert "control_state_error" in prompt
+    assert "lifetime_resource" in prompt
+
+
+def test_batched_expert_runner_does_not_add_calls_when_budget_is_exceeded() -> None:
+    client = _BatchRecordingClient()
+    candidate = _candidate("batch-1")
+    route = RouteDecision(
+        candidate_id=candidate.candidate_id,
+        scores={},
+        selected=[ExpertFamily.MEMORY_BOUNDS],
+        top1_confidence=1.0,
+        top1_top2_margin=1.0,
+        policy="test",
+        reasons=[],
+    )
+
+    output = BatchedExpertRunner(
+        client,
+        "model/panel",
+        ContextBuilder(),
+        max_batch_characters=10,
+    ).run([candidate], [route])
+
+    assert client.calls == []
+    assert output.submitted_task_count == 0
+    assert output.skipped_task_count == 1
 
 
 def _finding(finding_id: str, expert: ExpertFamily, model: str, line: int) -> Finding:

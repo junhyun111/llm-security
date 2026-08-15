@@ -4,7 +4,7 @@ from .aggregation import FindingAggregator
 from .analysis import SemanticStaticAnalyzer
 from .config import AppConfig
 from .evidence import ContextBuilder
-from .experts import ExpertRunner
+from .experts import BatchedExpertRunner, ExpertRunner
 from .llm import OpenRouterClient
 from .knowledge import LocalSecurityKnowledgeRetriever
 from .pipeline import VulnerabilityPipeline
@@ -69,6 +69,44 @@ def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
             strong_model=config.model.strong_model,
             use_llm_for_uncertain=config.validation.use_llm_for_uncertain,
             falsify_all_supported=config.validation.falsify_all_supported,
+        ),
+        candidate_gate=CandidateGate(
+            enabled=config.candidate_gate.enabled,
+            threshold=config.candidate_gate.threshold,
+        ),
+        max_candidates=config.analysis.max_candidates_per_project,
+    )
+
+
+def build_batched_web_pipeline(
+    config: AppConfig,
+    router: Router,
+    *,
+    max_batch_characters: int,
+    max_batch_tasks: int,
+) -> VulnerabilityPipeline:
+    """Build the web pipeline with one LLM call for all logical Experts."""
+
+    client = build_openrouter_client(config)
+    analyzer = SemanticStaticAnalyzer()
+    return VulnerabilityPipeline(
+        analyzer=analyzer,
+        router=router,
+        expert_runner=BatchedExpertRunner(
+            client=client,
+            model=config.model.expert_model,
+            context_builder=build_context_builder(config),
+            max_batch_characters=max_batch_characters,
+            max_tasks=max_batch_tasks,
+        ),
+        aggregator=FindingAggregator(),
+        validator=EvidenceValidator(
+            minimum_confidence=config.validation.minimum_confidence,
+            client=None,
+            model=None,
+            strong_model=None,
+            use_llm_for_uncertain=False,
+            falsify_all_supported=False,
         ),
         candidate_gate=CandidateGate(
             enabled=config.candidate_gate.enabled,

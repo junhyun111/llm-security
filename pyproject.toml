@@ -15,6 +15,9 @@ dependencies = [
   "tree-sitter>=0.25,<0.26",
   "tree-sitter-c>=0.24,<0.25",
   "tree-sitter-cpp>=0.23,<0.24",
+  "fastapi>=0.115,<1",
+  "python-multipart>=0.0.9,<1",
+  "uvicorn>=0.30,<1",
 ]
 
 [project.optional-dependencies]
@@ -25,12 +28,16 @@ dev = [
 
 [project.scripts]
 llm-security = "llm_security.cli:main"
+llm-security-web = "llm_security.web.run:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+llm_security = ["web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

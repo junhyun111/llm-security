@@ -10,3 +10,5 @@ experiment*.json
 router_*.jsonl
 data/arvo/*
 data/phase2e/
+.web-data/
+*.egg-info/

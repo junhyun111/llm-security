@@ -1,5 +1,67 @@
 # LLM Security Conditional Expert Pipeline
 
+## 웹 기반 프로젝트 분석 및 승인형 수정
+
+로컬 웹에서 프로젝트 폴더 전체를 선택하면 업로드 직후 분석 작업이 시작됩니다.
+정적 분석과 Router는 로컬에서 실행되고, Router가 선택한 여러 Expert 작업은
+`OPENROUTER_EXPERT_MODEL`의 단일 요청으로 묶입니다. 응답은 다시 Expert별 Finding으로
+분리되며, 정적 근거 검증에는 LLM을 추가 호출하지 않습니다. 결과 화면에서 취약점
+위치, CWE, 근본 원인과 근거를 확인할 수 있습니다.
+
+검증된 Finding 여러 개를 선택하면 한 번의 통합 패치 요청으로 coordinated diff를
+생성합니다. 사용자가 diff를 다시 승인해야만 별도의 프로젝트 복사본에 적용되며,
+업로드 원본은 변경되지 않습니다. 따라서 정상 흐름의 OpenRouter 호출 예산은
+프로젝트당 탐지 1회와 통합 패치 1회입니다. 웹 경로에서는 자동 API 재시도도
+비활성화됩니다.
+
+`.env`에서 다음 값이 필요합니다.
+
+```dotenv
+OPENROUTER_API_KEY=your-key
+RUN_PAID_EXPERIMENTS=1
+WEB_ROUTER_ARTIFACT=artifacts/phase2e/router_anchor_rare_v1.pkl
+WEB_HOST=127.0.0.1
+WEB_PORT=8000
+WEB_CANDIDATE_GATE_ENABLED=true
+WEB_DETECTION_MAX_PROMPT_CHARACTERS=120000
+WEB_DETECTION_MAX_EXPERT_TASKS=24
+WEB_PATCH_MAX_PROMPT_CHARACTERS=120000
+```
+
+설치 후 서버를 실행합니다.
+
+```powershell
+cd C:\Users\junhyun111\Desktop\llm-security
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+llm-security-web
+```
+
+브라우저에서 `http://127.0.0.1:8000`을 엽니다. 작업 상태와 업로드 파일은
+`.web-data/<job-id>` 아래에 저장됩니다. C/C++ 소스만 정적 분석 및 LLM context로
+사용되며 DB, 바이너리, `.git`, build 산출물은 LLM으로 보내지 않습니다. DB를
+포함한 나머지 업로드 파일은 승인된 프로젝트 ZIP을 만들기 위해서만 보관합니다.
+
+단일 요청의 컨텍스트와 출력 크기를 통제하기 위해 웹은 기본적으로 최대 24개
+Expert 작업과 120,000자의 탐지 프롬프트만 제출합니다. 초과 작업은 추가 요청으로
+나누지 않고 결과의 `skipped_expert_task_count`와 `errors`에 기록합니다. 이 값은
+`.env`의 `WEB_DETECTION_MAX_EXPERT_TASKS`와
+`WEB_DETECTION_MAX_PROMPT_CHARACTERS`로 조절할 수 있습니다. 서로 다른 모델을
+Expert마다 실제 실행하는 CLI 실험 경로는 기존대로 유지되지만, 웹의 단일 호출
+모드에서는 모든 논리 Expert가 `OPENROUTER_EXPERT_MODEL` 하나를 공유합니다.
+
+Docker로 실행할 수도 있습니다. Router artifact가 `artifacts/phase2e`에 있어야
+합니다.
+
+```powershell
+docker compose -f compose.web.yml up --build
+```
+
+현재 웹 구성은 로컬 단일 사용자 실행을 기본으로 합니다. 인터넷에 공개할 때는
+인증, TLS, 외부 작업 큐, 사용자별 저장소 암호화와 보존 기간 정책을 추가해야
+합니다. 업로드된 빌드 스크립트나 실행 파일은 자동 실행하지 않으며, 패치 검증은
+현재 diff 적용 가능 여부까지만 확인합니다.
+
 ## 새 Router 구조와 실행 순서
 
 현재 기본 학습 구조는 single-label Softmax 분류가 아닙니다. `memory_bounds`와

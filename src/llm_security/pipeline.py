@@ -55,4 +55,7 @@ class VulnerabilityPipeline:
             pre_gate_candidates=pre_gate_candidates,
             gate_decisions=gate_decisions,
             errors=expert_output.errors,
+            expert_task_count=expert_output.task_count,
+            submitted_expert_task_count=expert_output.submitted_task_count,
+            skipped_expert_task_count=expert_output.skipped_task_count,
         )
