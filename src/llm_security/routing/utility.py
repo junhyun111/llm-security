@@ -5,10 +5,11 @@ import math
 import pickle
 from collections import defaultdict
 from dataclasses import dataclass
+from itertools import combinations
 from pathlib import Path
 from typing import Callable, Iterable
 
-from ..datasets import UtilitySample
+from ..datasets import UTILITY_OUTCOME_LABEL_VERSION, UtilitySample
 from ..models import (
     ACTIVE_UTILITY_EXPERTS,
     Candidate,
@@ -80,6 +81,16 @@ class EscalationCalibration:
 
 
 @dataclass(slots=True)
+class BaselineCalibration:
+    """Dev-only choices used for honest Best-Single and Fixed-2 baselines."""
+
+    best_single_assignment_id: str
+    best_fixed_pair_assignment_ids: tuple[str, str]
+    best_single_metrics: "UtilityRouterMetrics"
+    best_fixed2_metrics: "UtilityRouterMetrics"
+
+
+@dataclass(slots=True)
 class UtilityRouterMetrics:
     candidate_count: int
     success_coverage: float
@@ -98,9 +109,17 @@ class UtilityRouterMetrics:
     average_prompt_tokens: float = 0.0
     average_completion_tokens: float = 0.0
     average_latency_seconds: float = 0.0
+    logical_expert_tasks: int = 0
+    research_physical_requests: int = 0
+    web_batched_requests: int = 0
     estimated_api_requests: int = 0
     brier_score: float = 0.0
     expected_calibration_error: float = 0.0
+    escalation_recall: float = 0.0
+    missed_escalation_rate: float = 0.0
+    unnecessary_escalation_rate: float = 0.0
+    gate_brier_score: float = 0.0
+    gate_expected_calibration_error: float = 0.0
 
 
 @dataclass(slots=True)
@@ -119,7 +138,7 @@ class BudgetedUtilityRouter:
     learned Top2Sufficient gate.
     """
 
-    artifact_version = 2
+    artifact_version = 3
     expert_taxonomy_version = "five-expert-memory-safety-v1"
 
     def __init__(
@@ -140,6 +159,10 @@ class BudgetedUtilityRouter:
         self.feature_schema_version = feature_schema_version
         self.escalation_gate = escalation_gate
         self.execution_model_id: str | None = None
+        self.best_single_assignment_id: str | None = None
+        self.best_fixed_pair_assignment_ids: tuple[str, str] | None = None
+        self.training_project_ids: set[str] = set()
+        self.development_project_ids: set[str] = set()
         self._artifact_version = self.artifact_version
         self._expert_taxonomy_version = self.expert_taxonomy_version
         self._validate_assignment_pool()
@@ -181,6 +204,19 @@ class BudgetedUtilityRouter:
         ]
         if not materialized:
             raise ValueError("Utility Router training requires five-Expert outcome samples")
+        invalid_labels = [
+            sample
+            for sample in materialized
+            if not sample.truth_labels_available
+            or sample.label_version != UTILITY_OUTCOME_LABEL_VERSION
+            or not sample.case_id
+        ]
+        if invalid_labels:
+            raise ValueError(
+                "Utility Router requires semantic outcome labels with case IDs. "
+                f"Expected label_version={UTILITY_OUTCOME_LABEL_VERSION}; "
+                "recollect legacy outcomes before training."
+            )
         schemas = {sample.candidate.feature_schema_version for sample in materialized}
         if len(schemas) != 1:
             raise ValueError(
@@ -221,13 +257,17 @@ class BudgetedUtilityRouter:
                 / count,
                 average_latency_seconds=sum(item.latency_seconds for item in rows) / count,
             )
-        return cls(
+        router = cls(
             model,
             assignments,
             statistics,
             policy=policy,
             feature_schema_version=next(iter(schemas)),
         )
+        router.training_project_ids = {
+            sample.candidate.project_id for sample in materialized
+        }
+        return router
 
     def fit_escalation_gate(
         self,
@@ -237,6 +277,9 @@ class BudgetedUtilityRouter:
     ) -> int:
         groups = _group_samples(samples)
         self._require_truth_labels(groups)
+        self.development_project_ids.update(
+            row.candidate.project_id for rows in groups.values() for row in rows
+        )
         rows: list[EscalationTrainingRow] = []
         for outcome_rows in groups.values():
             candidate = outcome_rows[0].candidate
@@ -268,6 +311,9 @@ class BudgetedUtilityRouter:
         if not groups:
             raise ValueError("Threshold calibration requires outcome samples")
         self._require_truth_labels(groups)
+        self.development_project_ids.update(
+            row.candidate.project_id for rows in groups.values() for row in rows
+        )
         confidences = [
             self._escalation_confidence(rows[0].candidate, self._rank(rows[0].candidate))
             for rows in groups.values()
@@ -303,6 +349,76 @@ class BudgetedUtilityRouter:
             )
         self.policy.escalation_threshold = selected.threshold
         return selected
+
+    def calibrate_baselines(
+        self, samples: Iterable[UtilitySample]
+    ) -> BaselineCalibration:
+        """Choose comparison baselines on dev data, never on the test split."""
+        groups = _group_samples(samples)
+        if not groups:
+            raise ValueError("Baseline calibration requires outcome samples")
+        self._require_truth_labels(groups)
+        self.development_project_ids.update(
+            row.candidate.project_id for rows in groups.values() for row in rows
+        )
+
+        assignment_ids = sorted(self.assignments)
+        single_results = [
+            (
+                (assignment_id,),
+                self._evaluate_groups(
+                    groups, lambda rows, item=assignment_id: [item]
+                ),
+            )
+            for assignment_id in assignment_ids
+        ]
+        pair_results = [
+            (
+                pair,
+                self._evaluate_groups(
+                    groups, lambda rows, items=pair: list(items)
+                ),
+            )
+            for pair in combinations(assignment_ids, 2)
+            if self.assignments[pair[0]].expert != self.assignments[pair[1]].expert
+        ]
+        if not pair_results:
+            raise ValueError("At least two distinct Expert assignments are required")
+
+        def selection_key(
+            item: tuple[tuple[str, ...], UtilityRouterMetrics]
+        ) -> tuple[float, float, float, tuple[str, ...]]:
+            ids, metrics = item
+            return (
+                -metrics.truth_recall,
+                -metrics.outcome_f1,
+                metrics.average_realized_cost,
+                ids,
+            )
+
+        single_ids, single_metrics = min(single_results, key=selection_key)
+        pair_ids, pair_metrics = min(pair_results, key=selection_key)
+        self.best_single_assignment_id = single_ids[0]
+        self.best_fixed_pair_assignment_ids = (pair_ids[0], pair_ids[1])
+        return BaselineCalibration(
+            best_single_assignment_id=single_ids[0],
+            best_fixed_pair_assignment_ids=(pair_ids[0], pair_ids[1]),
+            best_single_metrics=single_metrics,
+            best_fixed2_metrics=pair_metrics,
+        )
+
+    def assert_test_projects_unseen(
+        self, samples: Iterable[UtilitySample]
+    ) -> None:
+        test_projects = {sample.candidate.project_id for sample in samples}
+        overlap = test_projects & (
+            self.training_project_ids | self.development_project_ids
+        )
+        if overlap:
+            raise ValueError(
+                "Test outcome projects overlap Router train/dev projects: "
+                + ", ".join(sorted(overlap)[:5])
+            )
 
     def route(self, candidate: Candidate) -> RouteDecision:
         ranked = self._rank(candidate)
@@ -358,6 +474,7 @@ class BudgetedUtilityRouter:
         groups = _group_samples(samples)
         if not groups:
             raise ValueError("Utility Router evaluation requires outcome samples")
+        self._require_truth_labels(groups)
         return self._evaluate_groups(
             groups,
             lambda rows: [
@@ -375,6 +492,7 @@ class BudgetedUtilityRouter:
         groups = _group_samples(samples)
         if not groups:
             raise ValueError("Utility Router evaluation requires outcome samples")
+        self._require_truth_labels(groups)
 
         def ranked_ids(rows: list[UtilitySample]) -> list[str]:
             return self._rank(rows[0].candidate).ranked_assignment_ids
@@ -418,6 +536,16 @@ class BudgetedUtilityRouter:
                 ],
             ),
         }
+        if self.best_single_assignment_id is not None:
+            assignment_id = self.best_single_assignment_id
+            report["best_single"] = self._evaluate_groups(
+                groups, lambda rows: [assignment_id]
+            )
+        if self.best_fixed_pair_assignment_ids is not None:
+            pair = self.best_fixed_pair_assignment_ids
+            report["best_fixed2"] = self._evaluate_groups(
+                groups, lambda rows: list(pair)
+            )
         if anchor_router is not None:
             def anchor_selection(rows: list[UtilitySample]) -> list[str]:
                 ranked = self._rank(rows[0].candidate)
@@ -598,23 +726,47 @@ class BudgetedUtilityRouter:
         expected_cost = realized_cost = realized_reward = oracle_reward = 0.0
         prompt_tokens = completion_tokens = latency = 0.0
         calibration_pairs: list[tuple[float, bool]] = []
-        projects: set[str] = set()
+        gate_calibration_pairs: list[tuple[float, bool]] = []
+        web_cases: set[str] = set()
+        escalation_tp = escalation_fn = escalation_fp = escalation_tn = 0
         for rows in groups.values():
             candidate = rows[0].candidate
-            projects.add(candidate.project_id)
             selected_ids = selector(rows)
             selected_rows = _selected_rows(rows, selected_ids)
+            if selected_ids:
+                web_cases.add(
+                    rows[0].case_id
+                    or f"{candidate.project_id}:{candidate.candidate_id}"
+                )
             selected_successes += int(any(item.success for item in selected_rows))
             oracle_successes += int(any(item.success for item in rows))
             assignments += len(selected_ids)
             full5 += int(len(selected_ids) == len(ACTIVE_UTILITY_EXPERTS))
+            ranked = self._rank(candidate)
+            top2_ids = ranked.ranked_assignment_ids[: self.policy.normal_top_k]
+            top2_sufficient = _top2_sufficient(rows, top2_ids)
+            predicted_escalation = len(selected_ids) == len(ACTIVE_UTILITY_EXPERTS)
+            gate_confidence = self._escalation_confidence(candidate, ranked)
+            gate_calibration_pairs.append((gate_confidence, top2_sufficient))
+            if not top2_sufficient and predicted_escalation:
+                escalation_tp += 1
+            elif not top2_sufficient:
+                escalation_fn += 1
+            elif predicted_escalation:
+                escalation_fp += 1
+            else:
+                escalation_tn += 1
             truths = _truth_ids(rows)
             matched = _matched_truth_ids(selected_rows) & truths
             total_truths += len(truths)
             matched_truths += len(matched)
             exact += int(truths <= matched)
-            selected_true_outcomes += sum(item.success for item in selected_rows)
-            selected_false_outcomes += sum(item.false_positive for item in selected_rows)
+            selected_true_outcomes += sum(
+                _validated_true_count(item) for item in selected_rows
+            )
+            selected_false_outcomes += sum(
+                _validated_false_count(item) for item in selected_rows
+            )
             expected_cost += sum(
                 self.statistics[item].average_cost for item in selected_ids
             )
@@ -663,6 +815,26 @@ class BudgetedUtilityRouter:
             if calibration_pairs
             else 0.0
         )
+        gate_brier = (
+            sum(
+                (probability - float(label)) ** 2
+                for probability, label in gate_calibration_pairs
+            )
+            / len(gate_calibration_pairs)
+            if gate_calibration_pairs
+            else 0.0
+        )
+        required_escalations = escalation_tp + escalation_fn
+        sufficient_top2 = escalation_fp + escalation_tn
+        escalation_recall = (
+            escalation_tp / required_escalations if required_escalations else 1.0
+        )
+        missed_escalation_rate = (
+            escalation_fn / required_escalations if required_escalations else 0.0
+        )
+        unnecessary_escalation_rate = (
+            escalation_fp / sufficient_top2 if sufficient_top2 else 0.0
+        )
         return UtilityRouterMetrics(
             candidate_count=count,
             success_coverage=selected_successes / count,
@@ -681,9 +853,19 @@ class BudgetedUtilityRouter:
             average_prompt_tokens=prompt_tokens / count,
             average_completion_tokens=completion_tokens / count,
             average_latency_seconds=latency / count,
-            estimated_api_requests=len(projects),
+            logical_expert_tasks=assignments,
+            research_physical_requests=assignments,
+            web_batched_requests=len(web_cases),
+            estimated_api_requests=len(web_cases),
             brier_score=brier,
             expected_calibration_error=_expected_calibration_error(calibration_pairs),
+            escalation_recall=escalation_recall,
+            missed_escalation_rate=missed_escalation_rate,
+            unnecessary_escalation_rate=unnecessary_escalation_rate,
+            gate_brier_score=gate_brier,
+            gate_expected_calibration_error=_expected_calibration_error(
+                gate_calibration_pairs
+            ),
         )
 
     @staticmethod
@@ -693,13 +875,19 @@ class BudgetedUtilityRouter:
         missing = [
             f"{key[0]}/{key[1]}"
             for key, rows in groups.items()
-            if not all(item.truth_labels_available for item in rows)
+            if not all(
+                item.truth_labels_available
+                and item.case_id
+                and item.label_version == UTILITY_OUTCOME_LABEL_VERSION
+                for item in rows
+            )
         ]
         if missing:
             preview = ", ".join(missing[:3])
             raise ValueError(
-                "Top2Sufficient requires outcome rows with ground-truth IDs; "
-                f"recollect legacy rows. Missing labels for {preview}"
+                "Utility evaluation requires semantic outcome rows with case IDs; "
+                f"expected label_version={UTILITY_OUTCOME_LABEL_VERSION}. "
+                f"Recollect legacy rows. Invalid labels for {preview}"
             )
 
 
@@ -753,7 +941,7 @@ def _group_samples(
     grouped: dict[tuple[str, str], list[UtilitySample]] = defaultdict(list)
     for sample in samples:
         if sample.assignment.expert in ACTIVE_UTILITY_EXPERTS:
-            grouped[(sample.candidate.project_id, sample.candidate.candidate_id)].append(
+            grouped[(sample.case_id, sample.candidate.candidate_id)].append(
                 sample
             )
     return dict(grouped)
@@ -764,10 +952,10 @@ def _validate_complete_matrix(
 ) -> None:
     groups = _group_samples(samples)
     invalid: list[str] = []
-    for (project_id, candidate_id), rows in groups.items():
+    for (case_id, candidate_id), rows in groups.items():
         ids = [item.assignment.assignment_id for item in rows]
         if set(ids) != expected_assignment_ids or len(ids) != len(set(ids)):
-            invalid.append(f"{project_id}/{candidate_id}")
+            invalid.append(f"{case_id}/{candidate_id}")
     if invalid:
         raise ValueError(
             "Utility training requires a complete, duplicate-free Expert x model "
@@ -801,6 +989,18 @@ def _top2_sufficient(rows: list[UtilitySample], top2_ids: list[str]) -> bool:
     truths = _truth_ids(rows)
     matched = _matched_truth_ids(_selected_rows(rows, top2_ids))
     return truths <= matched
+
+
+def _validated_true_count(sample: UtilitySample) -> int:
+    if sample.validated_true_findings or sample.validated_false_findings:
+        return sample.validated_true_findings
+    return int(sample.success)
+
+
+def _validated_false_count(sample: UtilitySample) -> int:
+    if sample.validated_true_findings or sample.validated_false_findings:
+        return sample.validated_false_findings
+    return int(sample.false_positive)
 
 
 def _expected_calibration_error(

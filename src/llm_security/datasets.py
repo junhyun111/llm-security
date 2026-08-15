@@ -16,6 +16,9 @@ from .models import (
 )
 
 
+UTILITY_OUTCOME_LABEL_VERSION = "semantic-causal-v1"
+
+
 @dataclass(slots=True)
 class RouterSample:
     candidate: Candidate
@@ -38,6 +41,11 @@ class UtilitySample:
     completion_tokens: int = 0
     latency_seconds: float = 0.0
     truth_labels_available: bool = False
+    case_id: str = ""
+    label_version: str = "legacy-line-v1"
+    validated_true_findings: int = 0
+    validated_false_findings: int = 0
+    rejected_findings: int = 0
 
     def reward(
         self,
@@ -226,6 +234,17 @@ def load_utility_samples_jsonl(path: str | Path) -> list[UtilitySample]:
                                 "ground_truth_ids" in raw,
                             )
                         ),
+                        case_id=str(raw.get("case_id", "")),
+                        label_version=str(
+                            raw.get("label_version", "legacy-line-v1")
+                        ),
+                        validated_true_findings=int(
+                            raw.get("validated_true_findings", 0)
+                        ),
+                        validated_false_findings=int(
+                            raw.get("validated_false_findings", 0)
+                        ),
+                        rejected_findings=int(raw.get("rejected_findings", 0)),
                     )
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
@@ -261,6 +280,11 @@ def utility_sample_to_dict(sample: UtilitySample) -> dict:
         "completion_tokens": sample.completion_tokens,
         "latency_seconds": sample.latency_seconds,
         "truth_labels_available": sample.truth_labels_available,
+        "case_id": sample.case_id,
+        "label_version": sample.label_version,
+        "validated_true_findings": sample.validated_true_findings,
+        "validated_false_findings": sample.validated_false_findings,
+        "rejected_findings": sample.rejected_findings,
     }
 
 

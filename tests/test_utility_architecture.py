@@ -3,6 +3,7 @@ from pathlib import Path
 from llm_security.aggregation import FindingAggregator
 from llm_security.datasets import (
     RouterSample,
+    UTILITY_OUTCOME_LABEL_VERSION,
     UtilitySample,
     load_utility_samples_jsonl,
     write_utility_samples_jsonl,
@@ -44,6 +45,13 @@ def _candidate(candidate_id: str, *, rare: float = 0.0) -> Candidate:
         suspicion_score=0.9,
         feature_schema_version="semantic-v1",
     )
+
+
+def _utility_sample(candidate, assignment, success, **kwargs) -> UtilitySample:
+    kwargs.setdefault("truth_labels_available", True)
+    kwargs.setdefault("case_id", f"case-{candidate.candidate_id}")
+    kwargs.setdefault("label_version", UTILITY_OUTCOME_LABEL_VERSION)
+    return UtilitySample(candidate, assignment, success, **kwargs)
 
 
 def test_anchor_rare_router_preserves_multi_label_and_calibrates() -> None:
@@ -90,7 +98,7 @@ def test_utility_router_learns_assignment_success_and_round_trips(tmp_path: Path
         candidate = _candidate(f"candidate-{index}", rare=float(index % 2))
         rows.extend(
             [
-                    UtilitySample(
+                    _utility_sample(
                         candidate,
                         memory_good,
                         True,
@@ -99,11 +107,11 @@ def test_utility_router_learns_assignment_success_and_round_trips(tmp_path: Path
                         ground_truth_ids=[f"truth-{index}"],
                         truth_labels_available=True,
                     ),
-                    UtilitySample(candidate, memory_bad, False, false_positive=True, cost=0.02),
-                    UtilitySample(candidate, control_good, True, cost=0.01),
-                    UtilitySample(candidate, integer, False, cost=0.01),
-                    UtilitySample(candidate, taint, False, cost=0.01),
-                    UtilitySample(candidate, concurrency, False, cost=0.01),
+                    _utility_sample(candidate, memory_bad, False, false_positive=True, cost=0.02),
+                    _utility_sample(candidate, control_good, True, cost=0.01),
+                    _utility_sample(candidate, integer, False, cost=0.01),
+                    _utility_sample(candidate, taint, False, cost=0.01),
+                    _utility_sample(candidate, concurrency, False, cost=0.01),
             ]
         )
     path = tmp_path / "utility.jsonl"
@@ -354,7 +362,7 @@ def test_learned_gate_uses_all_truth_coverage_and_escalates() -> None:
                 ExpertFamily.CONTROL_STATE_ERROR,
             }
             train_rows.append(
-                UtilitySample(
+                _utility_sample(
                     candidate,
                     assignments[family],
                     success,
@@ -375,7 +383,7 @@ def test_learned_gate_uses_all_truth_coverage_and_escalates() -> None:
     for family in ACTIVE_UTILITY_EXPERTS:
         success = family == ExpertFamily.INTEGER_SIZE_TYPE
         gate_rows.append(
-            UtilitySample(
+            _utility_sample(
                 gate_candidate,
                 assignments[family],
                 success,

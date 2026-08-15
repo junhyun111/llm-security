@@ -23,6 +23,7 @@ def test_router_training_notebook_is_valid_and_offline():
     assert "BudgetedUtilityRouter.fit" in code
     assert "fit_escalation_gate" in code
     assert "calibrate_threshold" in code
+    assert "calibrate_baselines" in code
     assert "OPENROUTER" not in code.upper()
 
 
@@ -45,6 +46,7 @@ def test_evaluation_and_agent_notebooks_are_valid_and_separated():
             if cell["cell_type"] == "code":
                 compile("".join(cell.get("source", [])), f"notebook-cell-{index}", "exec")
     assert "evaluate_baselines" in evaluation_code
+    assert "write_utility_tradeoff_report" in evaluation_code
     assert ".evaluate(" in evaluation_code
     assert "build_pipeline" not in evaluation_code
     assert "build_pipeline" in agent_code

@@ -7,6 +7,7 @@ from itertools import islice
 from pathlib import Path
 
 from .arvo import prepare_arvo_cases, prepare_arvo_training_dataset
+from .benchmarks import prepare_juliet_dataset, merge_case_split_directories
 from .config import AppConfig
 from .analysis import SemanticStaticAnalyzer
 from .datasets import (
@@ -21,8 +22,10 @@ from .experiment import ExperimentRunner
 from .experiments import (
     Phase2EConfig,
     collect_expert_outcomes,
+    evaluate_utility_end_to_end,
     prepare_phase2e_jsonl,
     run_phase2e_jsonl,
+    write_utility_tradeoff_report,
 )
 from .factory import build_context_builder, build_openrouter_client, build_pipeline
 from .models import (
@@ -36,6 +39,7 @@ from .routing import (
     AdaptiveExpertRouter,
     AnchorRareRouter,
     BudgetedUtilityRouter,
+    CandidateGate,
     RoutingPolicyConfig,
     UtilityPolicyConfig,
     assert_project_disjoint,
@@ -110,6 +114,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional AnchorRare baseline artifact evaluated on the same candidates",
     )
     evaluate_utility_parser.add_argument("--output", default="")
+
+    end_to_end_parser = subparsers.add_parser(
+        "evaluate-utility-end-to-end",
+        help=(
+            "Replay analyzer, Candidate Gate, Router, and measured Expert outcomes "
+            "on a frozen case split without making LLM calls"
+        ),
+    )
+    end_to_end_parser.add_argument("--cases", required=True)
+    end_to_end_parser.add_argument("--outcomes", required=True)
+    end_to_end_parser.add_argument("--artifact", required=True)
+    end_to_end_parser.add_argument("--env-file", default=".env")
+    end_to_end_parser.add_argument("--max-cases", type=int, default=0)
+    end_to_end_parser.add_argument("--max-candidates-per-case", type=int, default=0)
+    end_to_end_parser.add_argument(
+        "--candidate-gate-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override CANDIDATE_GATE_ENABLED from .env.",
+    )
+    end_to_end_parser.add_argument(
+        "--gate-threshold",
+        type=float,
+        default=None,
+        help="Override CANDIDATE_GATE_THRESHOLD from .env.",
+    )
+    end_to_end_parser.add_argument("--output", default="")
+    _add_semantic_safety_options(end_to_end_parser)
+
+    plot_parser = subparsers.add_parser(
+        "plot-utility-results",
+        help="Create the policy comparison CSV and recall/cost SVG figures",
+    )
+    plot_parser.add_argument("--input", required=True)
+    plot_parser.add_argument("--output-dir", default="results/utility_figures")
 
     collect_parser = subparsers.add_parser(
         "collect-utility-outcomes",
@@ -191,6 +230,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     split_arvo_parser.add_argument("--dataset-dir", default="data/arvo")
     split_arvo_parser.add_argument("--seed", type=int, default=2026)
+
+    juliet_parser = subparsers.add_parser(
+        "prepare-juliet",
+        help="Convert an unpacked NIST Juliet C/C++ tree into E3/E4/E6 frozen splits",
+    )
+    juliet_parser.add_argument("--source", required=True)
+    juliet_parser.add_argument("--output-dir", default="data/juliet")
+    juliet_parser.add_argument(
+        "--families",
+        default=",".join(
+            family.value
+            for family in (
+                ExpertFamily.INTEGER_SIZE_TYPE,
+                ExpertFamily.TAINT_API_CONTRACT,
+                ExpertFamily.CONCURRENCY_TOCTOU,
+            )
+        ),
+    )
+    juliet_parser.add_argument("--max-cases", type=int, default=0)
+    juliet_parser.add_argument("--seed", type=int, default=2026)
+
+    merge_parser = subparsers.add_parser(
+        "merge-case-splits",
+        help="Merge ARVO/Juliet frozen split directories and reject project leakage",
+    )
+    merge_parser.add_argument("--inputs", nargs="+", required=True)
+    merge_parser.add_argument("--output-dir", default="data/benchmark")
 
     phase2e_parser = subparsers.add_parser(
         "phase2e",
@@ -318,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
             calibration_rows,
             target_truth_recall=args.target_truth_recall,
         )
+        baseline_calibration = router.calibrate_baselines(calibration_rows)
         metrics = router.evaluate(calibration_rows)
         router.save(args.output)
         print(
@@ -326,6 +393,7 @@ def main(argv: list[str] | None = None) -> int:
                     "artifact": args.output,
                     "gate_training_candidates": gate_sample_count,
                     "calibration": to_dict(calibration),
+                    "baseline_calibration": to_dict(baseline_calibration),
                     "calibration_metrics": to_dict(metrics),
                 },
                 ensure_ascii=False,
@@ -336,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "evaluate-utility-router":
         router = BudgetedUtilityRouter.load(args.artifact)
         test_rows = load_utility_samples_jsonl(args.test)
+        router.assert_test_projects_unseen(test_rows)
         anchor_router = (
             AnchorRareRouter.load(args.anchor_artifact)
             if args.anchor_artifact
@@ -354,6 +423,64 @@ def main(argv: list[str] | None = None) -> int:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(payload, encoding="utf-8")
         print(payload)
+        return 0
+    if args.command == "evaluate-utility-end-to-end":
+        config = AppConfig.from_env(args.env_file)
+        router = BudgetedUtilityRouter.load(args.artifact)
+        outcome_rows = load_utility_samples_jsonl(args.outcomes)
+        router.assert_test_projects_unseen(outcome_rows)
+        cases = iter_cases_jsonl(args.cases)
+        if args.max_cases:
+            cases = islice(cases, args.max_cases)
+        threshold = (
+            args.gate_threshold
+            if args.gate_threshold is not None
+            else config.candidate_gate.threshold
+        )
+        gate_enabled = (
+            args.candidate_gate_enabled
+            if args.candidate_gate_enabled is not None
+            else config.candidate_gate.enabled
+        )
+        metrics = evaluate_utility_end_to_end(
+            cases,
+            outcome_rows,
+            analyzer=SemanticStaticAnalyzer(
+                max_source_bytes=_source_limit_bytes(args.max_source_mb),
+                parse_timeout_ms=_parse_timeout_ms(args.parse_timeout_seconds),
+            ),
+            candidate_gate=CandidateGate(
+                enabled=gate_enabled,
+                threshold=threshold,
+            ),
+            router=router,
+            max_candidates_per_case=(
+                args.max_candidates_per_case or None
+            ),
+            progress=print,
+        )
+        report = {
+            "artifact": args.artifact,
+            "cases": args.cases,
+            "outcomes": args.outcomes,
+            "candidate_gate_enabled": gate_enabled,
+            "candidate_gate_threshold": threshold,
+            "metrics": to_dict(metrics),
+        }
+        payload = json.dumps(report, ensure_ascii=False, indent=2)
+        if args.output:
+            destination = Path(args.output)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(payload, encoding="utf-8")
+        print(payload)
+        return 0
+    if args.command == "plot-utility-results":
+        report = json.loads(Path(args.input).read_text(encoding="utf-8"))
+        policies = report.get("policies", report)
+        if not isinstance(policies, dict):
+            raise ValueError("Utility result JSON must contain a policies object")
+        outputs = write_utility_tradeoff_report(policies, args.output_dir)
+        print(json.dumps(outputs, ensure_ascii=False, indent=2))
         return 0
     if args.command == "collect-utility-outcomes":
         config = AppConfig.from_env(args.env_file)
@@ -484,6 +611,27 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
         )
         print(f"Split {len(cases)} ARVO cases into {args.dataset_dir}")
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "prepare-juliet":
+        families = tuple(
+            ExpertFamily(value.strip())
+            for value in args.families.split(",")
+            if value.strip()
+        )
+        manifest = prepare_juliet_dataset(
+            args.source,
+            args.output_dir,
+            families=families,
+            seed=args.seed,
+            max_cases=args.max_cases,
+        )
+        print(f"Juliet splits saved to {args.output_dir}")
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "merge-case-splits":
+        manifest = merge_case_split_directories(args.inputs, args.output_dir)
+        print(f"Merged frozen splits saved to {args.output_dir}")
         print(json.dumps(manifest, ensure_ascii=False, indent=2))
         return 0
     if args.command == "phase2e":

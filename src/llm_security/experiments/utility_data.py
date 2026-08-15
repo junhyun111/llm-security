@@ -16,6 +16,7 @@ from ..models import (
     RouteDecision,
 )
 from ..validation import EvidenceValidator
+from .outcome_matching import FindingTruthMatcher
 
 
 class CandidateAnalyzer(Protocol):
@@ -33,24 +34,32 @@ def collect_expert_outcomes(
     hard_negatives_per_case: int = 1,
     resume: bool = True,
     progress: Callable[[str], None] | None = None,
+    truth_matcher: FindingTruthMatcher | None = None,
 ) -> dict[str, object]:
     """Run the full Expert x model matrix and checkpoint compact outcome rows."""
     jobs = list(assignments)
     if not jobs:
         raise ValueError("At least one Expert x model assignment is required")
     destination = Path(output_path)
+    matcher = truth_matcher or FindingTruthMatcher()
     destination.parent.mkdir(parents=True, exist_ok=True)
     completed: set[tuple[str, str, str]] = set()
     if resume and destination.exists():
         existing = load_utility_samples_jsonl(destination)
-        if any(not sample.truth_labels_available for sample in existing):
+        if any(
+            not sample.truth_labels_available
+            or sample.label_version != matcher.label_version
+            or not sample.case_id
+            for sample in existing
+        ):
             raise ValueError(
-                "Existing outcome JSONL uses the legacy schema without truth IDs. "
-                "Rerun with --no-resume to rebuild Top2Sufficient labels."
+                "Existing outcome JSONL uses legacy or incompatible GT labels. "
+                f"Expected label_version={matcher.label_version} with case IDs. "
+                "Rerun with --no-resume to rebuild outcomes."
             )
         completed = {
             (
-                sample.candidate.project_id,
+                sample.case_id,
                 sample.candidate.candidate_id,
                 sample.assignment.assignment_id,
             )
@@ -85,7 +94,7 @@ def collect_expert_outcomes(
             ]
             for assignment in jobs:
                 key = (
-                    candidate.project_id,
+                    case.case_id,
                     candidate.candidate_id,
                     assignment.assignment_id,
                 )
@@ -112,7 +121,7 @@ def collect_expert_outcomes(
                     else:
                         rejected += 1
                 success = any(
-                    _finding_matches_truth(finding, truth)
+                    matcher.matches(finding, truth, candidate)
                     for finding in accepted
                     for truth in truths
                 )
@@ -121,13 +130,24 @@ def collect_expert_outcomes(
                         truth.truth_id
                         for finding in accepted
                         for truth in truths
-                        if _finding_matches_truth(finding, truth)
+                        if matcher.matches(finding, truth, candidate)
                     }
                 )
                 false_positive = any(
-                    not any(_finding_matches_truth(finding, truth) for truth in truths)
+                    not any(
+                        matcher.matches(finding, truth, candidate)
+                        for truth in truths
+                    )
                     for finding in accepted
                 )
+                validated_true_findings = sum(
+                    any(
+                        matcher.matches(finding, truth, candidate)
+                        for truth in truths
+                    )
+                    for finding in accepted
+                )
+                validated_false_findings = len(accepted) - validated_true_findings
                 cost = sum(item.cost for item in output.usage)
                 sample = UtilitySample(
                     candidate=candidate,
@@ -146,6 +166,11 @@ def collect_expert_outcomes(
                         item.latency_seconds for item in output.usage
                     ),
                     truth_labels_available=True,
+                    case_id=case.case_id,
+                    label_version=matcher.label_version,
+                    validated_true_findings=validated_true_findings,
+                    validated_false_findings=validated_false_findings,
+                    rejected_findings=rejected,
                 )
                 with destination.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(utility_sample_to_dict(sample), ensure_ascii=False) + "\n")
@@ -167,6 +192,7 @@ def collect_expert_outcomes(
         "failed_jobs": failed,
         "output": str(destination),
         "new_rows_by_assignment": dict(by_assignment),
+        "label_version": matcher.label_version,
     }
 
 
@@ -205,11 +231,10 @@ def _candidate_matches_truth(candidate: Candidate, truth: GroundTruth) -> bool:
     )
 
 
-def _finding_matches_truth(finding: Finding, truth: GroundTruth) -> bool:
-    # Deliberately no Expert-family condition: outcome GT measures whether the
-    # assignment actually found the vulnerability, not whether its name matches.
-    return (
-        finding.file == truth.file
-        and finding.line_start <= truth.line_end
-        and finding.line_end >= truth.line_start
-    )
+def _finding_matches_truth(
+    finding: Finding,
+    truth: GroundTruth,
+    candidate: Candidate,
+) -> bool:
+    """Compatibility wrapper retained for experiment callers and tests."""
+    return FindingTruthMatcher().matches(finding, truth, candidate)

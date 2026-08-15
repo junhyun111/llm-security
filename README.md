@@ -98,9 +98,15 @@ python -m llm_security.cli train-anchor-router `
 응답 형식을 확인합니다. 수집 결과는 매 요청마다 checkpoint되므로 중단 후 같은
 명령을 실행하면 이어서 진행합니다.
 
+Outcome 정답은 단순 line overlap이 아니라 `LocationMatch AND EvidenceValid AND
+SemanticCompatible`로 판정됩니다. 현재 label version은 `semantic-causal-v1`입니다. 이전
+형식의 outcome 파일은 학습과 resume에서 거부되므로, 기존 파일을 보관한 뒤
+`--no-resume`으로 다시 수집해야 합니다. GT 규칙 변경만으로 API를 자동 호출하지는
+않습니다.
+
 ```powershell
 python -m llm_security.cli collect-utility-outcomes `
-  --cases data\phase2e\cases_train.jsonl `
+  --cases data\benchmark\cases_train.jsonl `
   --output data\utility\outcomes_train.jsonl `
   --max-cases 5
 ```
@@ -109,14 +115,14 @@ python -m llm_security.cli collect-utility-outcomes `
 
 ```powershell
 python -m llm_security.cli collect-utility-outcomes `
-  --cases data\phase2e\cases_dev.jsonl `
+  --cases data\benchmark\cases_dev.jsonl `
   --output data\utility\outcomes_dev.jsonl `
   --max-cases 5
 ```
 
 ```powershell
 python -m llm_security.cli collect-utility-outcomes `
-  --cases data\phase2e\cases_test.jsonl `
+  --cases data\benchmark\cases_test.jsonl `
   --output data\utility\outcomes_test.jsonl `
   --max-cases 5
 ```
@@ -140,7 +146,10 @@ python -m llm_security.cli train-utility-router `
 
 `--gate-train`을 생략하면 dev 프로젝트를 절반씩 나눠 한쪽으로 Escalation Gate를
 학습하고 다른 쪽으로 recall 제약하에서 최소 비용 threshold를 고릅니다. test는 이
-명령에서 읽지 않습니다. 학습 완료 후 test는 한 번만 평가합니다.
+명령에서 읽지 않습니다. Best Single Expert/Model과 Best Fixed-2도 이 calibration
+split에서 고정하며 test 결과를 보고 선택하지 않습니다. 이 변경의 artifact format은
+v3이므로 기존 파일이 있더라도 위 명령으로 다시 학습해 덮어써야 합니다. 학습 완료 후
+test는 한 번만 평가합니다.
 
 ```powershell
 python -m llm_security.cli evaluate-utility-router `
@@ -150,10 +159,41 @@ python -m llm_security.cli evaluate-utility-router `
   --output results\utility_test.json
 ```
 
-평가 보고서는 Full-5, 고정 E1+E3, Utility Top-2, 독립확률 escalation, 학습 gate를
-같이 비교하고 truth recall, exact coverage, 평균 Expert 수, Full-5 비율, token·비용,
-latency, Brier/ECE를 기록합니다. 웹에서는 후보별 논리 Expert 수만 달라지고 실제
-탐지 API 요청은 계속 프로젝트당 한 번입니다.
+평가 보고서는 Best Single, Best Fixed-2, Full-5, 고정 E1+E3, Utility Top-2,
+독립확률 escalation, 학습 gate를 같이 비교합니다. truth recall, precision/F1, 평균
+Expert 수, Full-5 비율뿐 아니라 Escalation Recall, Missed/Unnecessary Escalation Rate,
+Expert predictor와 Gate 각각의 Brier/ECE를 기록합니다. 요청량은
+`logical_expert_tasks`, 개별 모델 outcome 수집의 `research_physical_requests`, 웹에서
+프로젝트 단위로 묶인 `web_batched_requests`로 분리합니다.
+
+정책 비교 표와 `Recall vs Average Experts`, `Recall vs API Cost` 그래프는 평가 JSON에서
+생성합니다.
+
+```powershell
+python -m llm_security.cli plot-utility-results `
+  --input results\utility_test.json `
+  --output-dir results\utility_figures
+```
+
+### 전체 파이프라인 오프라인 평가
+
+Router outcome에 포함된 후보만 평가하면 정적 분석기와 Candidate Gate에서 놓친 GT가
+보이지 않습니다. 아래 명령은 test case를 다시 정적 분석하고 Gate → Router → 이미
+수집한 post-validator outcome을 재생합니다. OpenRouter는 호출하지 않습니다.
+
+```powershell
+python -m llm_security.cli evaluate-utility-end-to-end `
+  --cases data\benchmark\cases_test.jsonl `
+  --outcomes data\utility\outcomes_test.jsonl `
+  --artifact artifacts\phase2e\router_top2_full5_v2.pkl `
+  --candidate-gate-enabled `
+  --output results\utility_end_to_end.json
+```
+
+결과에는 Analyzer Candidate Recall, Candidate Gate GT Retention, outcome matrix GT
+coverage, Full-5 oracle recall, routed detection recall, post-validator precision과 최종
+End-to-End F1이 따로 기록됩니다. `outcome_matrix_gt_coverage`가 낮으면 Router가 아니라
+outcome 수집 범위부터 보완해야 합니다.
 
 C/C++ 오픈소스에서 정적 분석으로 취약 후보 함수를 찾고, 학습된 Router가 후보별 Expert를 선택한 뒤 OpenRouter LLM으로 분석하는 실험용 파이프라인입니다.
 
@@ -192,7 +232,37 @@ python -m llm_security.cli prepare-arvo `
 - `router_{train,dev,test}.jsonl`: 실제 ARVO 취약 함수 후보와 Expert 정답
 - `manifest.json`: 프로젝트와 family 분포
 
-현재 생성된 60개 사례는 프로젝트 단위로 train 42개, dev 9개, test 9개이며 프로젝트 중복이 없습니다. ARVO fuzzing 레코드에서 확보된 family는 `memory_bounds`, `lifetime_resource`, `control_state_error` 세 종류입니다. 나머지 Expert family를 학습하려면 다른 benchmark를 추가해야 합니다.
+현재 로컬 ARVO JSONL은 4,160개 사례이며 프로젝트 단위로 train 2,940개, dev
+485개, test 735개로 분리되어 프로젝트 중복이 없습니다. ARVO에서 확보된 family는
+주로 `memory_bounds`, `lifetime_resource`, `control_state_error`이므로 E3/E4/E6를
+검증하려면 아래 benchmark를 추가해야 합니다.
+
+### E3/E4/E6용 NIST Juliet 추가
+
+ARVO만으로 부족한 E3 Integer, E4 Taint/API, E6 Concurrency 양성 사례는 압축을 푼
+Juliet C/C++ 소스 폴더에서 변환합니다. 변환기는 `bad` 계열 함수와 `FLAW` 표시 위치만
+GT로 사용하고, 번호만 다른 Juliet flow variant를 같은 template project로 묶어
+train/dev/test 간 near-clone 누수를 막습니다. 이 단계는 네트워크나 LLM API를 사용하지
+않습니다.
+
+```powershell
+python -m llm_security.cli prepare-juliet `
+  --source C:\datasets\juliet\C\testcases `
+  --output-dir data\juliet `
+  --seed 2026
+```
+
+ARVO와 Juliet의 이미 고정된 split은 다음처럼 합칩니다. 같은 `project_id`가 서로 다른
+split에 있거나 `case_id`가 중복되면 병합을 중단합니다.
+
+```powershell
+python -m llm_security.cli merge-case-splits `
+  --inputs data\arvo data\juliet `
+  --output-dir data\benchmark
+```
+
+생성된 `data/benchmark/cases_{train,dev,test}.jsonl`에서 각 Expert가 train/dev/test에
+모두 존재하는지 `split_manifest.json`의 `family_distribution`으로 먼저 확인합니다.
 
 공개 GitHub 파일 다운로드가 제한되면 현재 PowerShell 세션에 token을 선택적으로 설정할 수 있습니다.
 
