@@ -9,7 +9,7 @@ from .arvo import prepare_arvo_cases, prepare_arvo_training_dataset
 from .config import AppConfig
 from .datasets import load_cases_jsonl, load_router_samples_jsonl, write_cases_jsonl
 from .experiment import ExperimentRunner
-from .experiments import Phase2EConfig, run_phase2e
+from .experiments import Phase2EConfig, prepare_phase2e_jsonl, run_phase2e_jsonl
 from .factory import build_pipeline
 from .models import ProjectCase, to_dict
 from .routing import AdaptiveExpertRouter, RoutingPolicyConfig
@@ -106,6 +106,24 @@ def build_parser() -> argparse.ArgumentParser:
     phase2e_parser.add_argument("--seed", type=int, default=2026)
     phase2e_parser.add_argument("--target-gate-retention", type=float, default=0.98)
     phase2e_parser.add_argument("--target-routing-coverage", type=float, default=0.95)
+    _add_semantic_safety_options(phase2e_parser)
+
+    phase2e_prepare_parser = subparsers.add_parser(
+        "phase2e-prepare",
+        help="Stream ARVO into compact Phase 2E Router JSONL files without training",
+    )
+    phase2e_prepare_parser.add_argument(
+        "--cases", default="data/arvo/cases_all.jsonl"
+    )
+    phase2e_prepare_parser.add_argument("--data-dir", default="data/phase2e")
+    phase2e_prepare_parser.add_argument("--seed", type=int, default=2026)
+    phase2e_prepare_parser.add_argument(
+        "--backend",
+        choices=("all", "legacy", "semantic"),
+        default="all",
+        help="Prepare both backends or rerun only one backend.",
+    )
+    _add_semantic_safety_options(phase2e_prepare_parser)
     return parser
 
 
@@ -216,13 +234,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(manifest, ensure_ascii=False, indent=2))
         return 0
     if args.command == "phase2e":
-        cases = load_cases_jsonl(args.cases)
-        result = run_phase2e(
-            cases,
+        result = run_phase2e_jsonl(
+            args.cases,
             config=Phase2EConfig(
                 seed=args.seed,
                 target_gate_retention=args.target_gate_retention,
                 target_routing_coverage=args.target_routing_coverage,
+                semantic_max_source_bytes=_source_limit_bytes(args.max_source_mb),
+                semantic_parse_timeout_ms=_parse_timeout_ms(args.parse_timeout_seconds),
                 data_directory=args.data_dir,
                 artifact_directory=args.artifacts_dir,
                 output_directory=args.output,
@@ -231,6 +250,23 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"Phase 2E results saved to {args.output}")
         print(json.dumps(result["manifest"], ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "phase2e-prepare":
+        summary = prepare_phase2e_jsonl(
+            args.cases,
+            config=Phase2EConfig(
+                seed=args.seed,
+                semantic_max_source_bytes=_source_limit_bytes(args.max_source_mb),
+                semantic_parse_timeout_ms=_parse_timeout_ms(args.parse_timeout_seconds),
+                data_directory=args.data_dir,
+            ),
+            progress=print,
+            backends=("legacy", "semantic")
+            if args.backend == "all"
+            else (args.backend,),
+        )
+        print(f"Phase 2E Router data saved to {args.data_dir}")
+        print(json.dumps(summary["router_sample_counts"], ensure_ascii=False, indent=2))
         return 0
     return 1
 
@@ -251,6 +287,40 @@ def _routing_policy_config(config: AppConfig) -> RoutingPolicyConfig:
         max_entropy=config.router.max_entropy,
         max_experts=config.router.max_experts,
     )
+
+
+def _add_semantic_safety_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--max-source-mb",
+        type=float,
+        default=2.0,
+        help=(
+            "Skip and log a case containing a source file larger than this "
+            "value during semantic analysis (0 disables the limit)."
+        ),
+    )
+    parser.add_argument(
+        "--parse-timeout-seconds",
+        type=int,
+        default=30,
+        help="Tree-sitter parse timeout per source file (0 disables the timeout).",
+    )
+
+
+def _source_limit_bytes(value: float) -> int | None:
+    if value < 0:
+        raise ValueError("--max-source-mb must be non-negative")
+    if value == 0:
+        return None
+    return int(value * 1024 * 1024)
+
+
+def _parse_timeout_ms(value: int) -> int | None:
+    if value < 0:
+        raise ValueError("--parse-timeout-seconds must be non-negative")
+    if value == 0:
+        return None
+    return value * 1_000
 
 
 def _read_sources(path: Path) -> dict[str, str]:

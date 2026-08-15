@@ -1,4 +1,6 @@
-from llm_security.analysis import TreeSitterFrontend
+import pytest
+
+from llm_security.analysis import AnalysisLimitError, TreeSitterFrontend
 
 
 def test_c_frontend_builds_structured_function_ir_and_call_graph() -> None:
@@ -120,3 +122,20 @@ int consume(char *ptr, int length) {
     assert for_control.update is not None
     assert for_control.update.defs == {"i"}
     assert for_control.update.uses == {"i"}
+
+
+def test_frontend_handles_ast_deeper_than_python_recursion_limit() -> None:
+    expression = "(" * 1_200 + "1" + ")" * 1_200
+    functions = TreeSitterFrontend().parse_file(
+        "deep.c", f"int deeply_nested(void) {{ return {expression}; }}"
+    )
+
+    assert len(functions) == 1
+    assert functions[0].name == "deeply_nested"
+
+
+def test_frontend_rejects_source_over_safety_limit() -> None:
+    with pytest.raises(AnalysisLimitError, match="limit is 10 bytes"):
+        TreeSitterFrontend(max_source_bytes=10).parse_file(
+            "large.c", "int value(void) { return 0; }"
+        )

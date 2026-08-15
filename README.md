@@ -213,6 +213,9 @@ pytest
 ARVO case 전체를 고정된 project-disjoint split으로 나누고 Legacy/Semantic
 analyzer, Candidate Gate, Softmax Router, Adaptive Top-K 및 rule fallback을 같은
 조건에서 비교합니다. 이 명령은 OpenRouter 또는 다른 LLM API를 호출하지 않습니다.
+CLI는 `cases_all.jsonl`을 한 건씩 읽는 스트리밍 경로를 사용하므로 전체 소스
+코퍼스를 메모리에 동시에 올리지 않습니다. Router JSONL에는 학습에 필요한
+feature와 label만 남기고 원본 함수 코드와 Evidence는 제외합니다.
 
 ```powershell
 python -m llm_security.cli phase2e `
@@ -225,5 +228,24 @@ python -m llm_security.cli phase2e `
 
 분할과 backend별 Router JSONL은 `data/phase2e`, 학습된 Router는
 `artifacts/phase2e`, 평가 결과는 `results/phase2e`에 저장됩니다.
+
+전처리와 notebook 학습을 분리하려면 먼저 아래 명령만 실행합니다.
+
+```powershell
+python -m llm_security.cli phase2e-prepare `
+  --cases data\arvo\cases_all.jsonl `
+  --data-dir data\phase2e `
+  --seed 2026
+```
+
+Semantic preprocessing has a 2 MiB per-source-file safety cap and a 30-second
+Tree-sitter parse timeout by default. Oversized or timed-out cases are retained
+in the benchmark denominator and recorded in
+`data/phase2e/analysis_failures/semantic_<split>.jsonl`. Override them with
+`--max-source-mb` and `--parse-timeout-seconds` when needed.
+
+그 다음 `notebooks/01_train_router.ipynb`의 셀을 위에서부터 실행하면
+`artifacts/phase2e/router_legacy_v1.pkl`과
+`artifacts/phase2e/router_semantic_v1.pkl`이 생성됩니다.
 
 함수 경계는 Tree-sitter C/C++ AST로 추출합니다. 현재 Router 특징은 portable 정적 신호이며, 이후 Clang·CodeQL·Joern adapter가 동일한 `Candidate`와 `Evidence` schema를 출력하도록 확장할 수 있습니다.

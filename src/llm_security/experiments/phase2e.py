@@ -26,7 +26,8 @@ from .router_eval import (
     evaluate_supported_router,
     feature_importance,
 )
-from .split import freeze_project_split
+from .split import FrozenProjectSplit, freeze_project_split, freeze_project_split_jsonl
+from .streaming import analyze_split_jsonl
 
 
 @dataclass(slots=True, frozen=True)
@@ -34,9 +35,197 @@ class Phase2EConfig:
     seed: int = 2026
     target_gate_retention: float = 0.98
     target_routing_coverage: float = 0.95
+    semantic_max_source_bytes: int | None = 2 * 1024 * 1024
+    semantic_parse_timeout_ms: int | None = 30_000
     data_directory: str | Path = "data/phase2e"
     artifact_directory: str | Path = "artifacts/phase2e"
     output_directory: str | Path = "results/phase2e"
+
+
+@dataclass(slots=True)
+class _PreparedPhase2E:
+    frozen: FrozenProjectSplit
+    analyzer_results: dict[str, dict[str, AnalyzerEvaluation]]
+    router_samples: dict[str, dict[str, list[RouterSample]]]
+
+
+def run_phase2e_jsonl(
+    cases_path: str | Path,
+    *,
+    config: Phase2EConfig | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, object]:
+    """Memory-bounded Phase 2E entry point used by the CLI."""
+    selected = config or Phase2EConfig()
+    prepared = _prepare_phase2e_jsonl(
+        cases_path,
+        config=selected,
+        progress=progress,
+        retain_for_evaluation=True,
+        stage_total=7,
+        backends=("legacy", "semantic"),
+    )
+    return run_phase2e(
+        [],
+        config=selected,
+        progress=progress,
+        _prepared=prepared,
+    )
+
+
+def prepare_phase2e_jsonl(
+    cases_path: str | Path,
+    *,
+    config: Phase2EConfig | None = None,
+    progress: Callable[[str], None] | None = None,
+    backends: tuple[str, ...] = ("legacy", "semantic"),
+) -> dict[str, object]:
+    """Create compact Router datasets and stop before model training."""
+    selected = config or Phase2EConfig()
+    prepared = _prepare_phase2e_jsonl(
+        cases_path,
+        config=selected,
+        progress=progress,
+        retain_for_evaluation=False,
+        stage_total=2,
+        backends=backends,
+    )
+    summary = {
+        "seed": selected.seed,
+        "streaming": True,
+        "training_performed": False,
+        "split_manifest": prepared.frozen.manifest,
+        "analyzer_metrics": {
+            backend: {
+                split: to_dict(evaluation.metrics)
+                for split, evaluation in results.items()
+            }
+            for backend, results in prepared.analyzer_results.items()
+        },
+        "router_sample_counts": {
+            backend: {
+                split: len(samples)
+                for split, samples in split_samples.items()
+            }
+            for backend, split_samples in prepared.router_samples.items()
+        },
+    }
+    write_json(summary, Path(selected.data_directory) / "preparation_summary.json")
+    _progress(
+        progress,
+        f"Prepared Router JSONL files in {Path(selected.data_directory)}",
+    )
+    return summary
+
+
+def _prepare_phase2e_jsonl(
+    cases_path: str | Path,
+    *,
+    config: Phase2EConfig,
+    progress: Callable[[str], None] | None,
+    retain_for_evaluation: bool,
+    stage_total: int,
+    backends: tuple[str, ...],
+) -> _PreparedPhase2E:
+    selected = config
+    data_directory = Path(selected.data_directory)
+    _progress(
+        progress,
+        f"[1/{stage_total}] Freezing the project-disjoint split (streaming)",
+    )
+    frozen_files = freeze_project_split_jsonl(
+        cases_path,
+        data_directory,
+        seed=selected.seed,
+        progress=progress,
+    )
+    split_items = frozen_files.manifest["splits"]  # type: ignore[index]
+    available_analyzers = {
+        "legacy": LightweightStaticAnalyzer(max_candidates=None),
+        "semantic": SemanticStaticAnalyzer(
+            max_source_bytes=selected.semantic_max_source_bytes,
+            parse_timeout_ms=selected.semantic_parse_timeout_ms,
+        ),
+    }
+    invalid = set(backends) - set(available_analyzers)
+    if not backends or invalid:
+        raise ValueError(
+            "backends must contain legacy and/or semantic; invalid: "
+            + ", ".join(sorted(invalid))
+        )
+    analyzers = {backend: available_analyzers[backend] for backend in backends}
+    analyzer_results: dict[str, dict[str, AnalyzerEvaluation]] = {
+        backend: {} for backend in analyzers
+    }
+    router_samples: dict[str, dict[str, list[RouterSample]]] = {
+        backend: {} for backend in analyzers
+    }
+    retained_cases: dict[str, list[ProjectCase]] = {
+        "train": [],
+        "dev": [],
+        "test": [],
+    }
+    for backend, analyzer in analyzers.items():
+        _progress(
+            progress,
+            f"[2/{stage_total}] Running {backend} analyzer one case at a time",
+        )
+        for split_name in ("train", "dev", "test"):
+            retain = retain_for_evaluation and (
+                split_name == "test"
+                or (backend == "semantic" and split_name == "dev")
+            )
+            output = analyze_split_jsonl(
+                analyzer,
+                frozen_files.files[split_name],
+                retain_compact_analysis=retain,
+                expected_case_count=int(split_items[split_name]["case_count"]),  # type: ignore[index]
+                progress=(
+                    lambda done, total, backend=backend, split_name=split_name: _progress(
+                        progress,
+                        f"      {backend}/{split_name}: {done}/{total} cases",
+                    )
+                ),
+                case_start_progress=(
+                    lambda done, total, case, backend=backend, split_name=split_name: _report_large_case(
+                        progress,
+                        backend=backend,
+                        split_name=split_name,
+                        done=done,
+                        total=total,
+                        case=case,
+                    )
+                ),
+                failure_log_path=(
+                    data_directory
+                    / "analysis_failures"
+                    / f"{backend}_{split_name}.jsonl"
+                ),
+            )
+            analyzer_results[backend][split_name] = AnalyzerEvaluation(
+                metrics=output.metrics,
+                candidates_by_case=output.retained_candidates_by_case,
+            )
+            router_samples[backend][split_name] = output.router_samples
+            if (
+                retain_for_evaluation
+                and backend == "semantic"
+                and split_name in {"dev", "test"}
+            ):
+                retained_cases[split_name] = output.retained_cases
+        write_backend_router_datasets(
+            router_samples[backend], data_directory / backend
+        )
+    frozen = FrozenProjectSplit(
+        seed=selected.seed,
+        cases=retained_cases,
+        manifest=frozen_files.manifest,
+    )
+    return _PreparedPhase2E(
+        frozen=frozen,
+        analyzer_results=analyzer_results,
+        router_samples=router_samples,
+    )
 
 
 def run_phase2e(
@@ -44,56 +233,59 @@ def run_phase2e(
     *,
     config: Phase2EConfig | None = None,
     progress: Callable[[str], None] | None = None,
+    _prepared: _PreparedPhase2E | None = None,
 ) -> dict[str, object]:
     """Run the complete Phase 2E experiment without any LLM API calls."""
     selected = config or Phase2EConfig()
-    if not cases:
+    if not cases and _prepared is None:
         raise ValueError("Phase 2E requires at least one ProjectCase")
     data_directory = Path(selected.data_directory)
     artifact_directory = Path(selected.artifact_directory)
     output_directory = Path(selected.output_directory)
 
-    _progress(progress, "[1/7] Freezing the project-disjoint split")
-    frozen = freeze_project_split(cases, data_directory, seed=selected.seed)
+    if _prepared is not None:
+        frozen = _prepared.frozen
+        analyzer_results = _prepared.analyzer_results
+        router_samples = _prepared.router_samples
+    else:
+        _progress(progress, "[1/7] Freezing the project-disjoint split")
+        frozen = freeze_project_split(cases, data_directory, seed=selected.seed)
 
-    analyzers = {
-        "legacy": LightweightStaticAnalyzer(max_candidates=None),
-        "semantic": SemanticStaticAnalyzer(),
-    }
-    analyzer_results: dict[str, dict[str, AnalyzerEvaluation]] = {
-        backend: {} for backend in analyzers
-    }
-    router_samples: dict[str, dict[str, list[RouterSample]]] = {
-        backend: {} for backend in analyzers
-    }
-    for backend, analyzer in analyzers.items():
-        _progress(progress, f"[2/7] Running {backend} analyzer on the frozen splits")
-        for split_name in ("train", "dev", "test"):
-            evaluation = evaluate_analyzer(
-                analyzer,
-                frozen.cases[split_name],
-                progress=(
-                    lambda done, total, backend=backend, split_name=split_name: _progress(
-                        progress,
-                        f"      {backend}/{split_name}: {done}/{total} cases",
-                    )
-                ),
-            )
-            analyzer_results[backend][split_name] = evaluation
-            router_samples[backend][split_name] = single_label_samples(
-                router_samples_from_cached_candidates(
-                    frozen.cases[split_name], evaluation.candidates_by_case
+        analyzers = {
+            "legacy": LightweightStaticAnalyzer(max_candidates=None),
+            "semantic": SemanticStaticAnalyzer(
+                max_source_bytes=selected.semantic_max_source_bytes,
+                parse_timeout_ms=selected.semantic_parse_timeout_ms,
+            ),
+        }
+        analyzer_results = {backend: {} for backend in analyzers}
+        router_samples = {backend: {} for backend in analyzers}
+        for backend, analyzer in analyzers.items():
+            _progress(progress, f"[2/7] Running {backend} analyzer on the frozen splits")
+            for split_name in ("train", "dev", "test"):
+                evaluation = evaluate_analyzer(
+                    analyzer,
+                    frozen.cases[split_name],
+                    progress=(
+                        lambda done, total, backend=backend, split_name=split_name: _progress(
+                            progress,
+                            f"      {backend}/{split_name}: {done}/{total} cases",
+                        )
+                    ),
                 )
+                analyzer_results[backend][split_name] = evaluation
+                router_samples[backend][split_name] = single_label_samples(
+                    router_samples_from_cached_candidates(
+                        frozen.cases[split_name], evaluation.candidates_by_case
+                    )
+                )
+                if split_name == "train" or (
+                    backend == "legacy" and split_name == "dev"
+                ):
+                    evaluation.candidates_by_case.clear()
+            write_backend_router_datasets(
+                router_samples[backend], data_directory / backend
             )
-            if split_name == "train" or (
-                backend == "legacy" and split_name == "dev"
-            ):
-                # Router samples now own the matched Candidates; keeping every
-                # non-matching Candidate from large source files wastes memory.
-                evaluation.candidates_by_case.clear()
-        write_backend_router_datasets(
-            router_samples[backend], data_directory / backend
-        )
 
     _progress(progress, "[3/7] Calibrating the semantic Candidate Gate on dev only")
     semantic_dev = analyzer_results["semantic"]["dev"]
@@ -427,3 +619,24 @@ def _git_commit() -> str:
 def _progress(callback: Callable[[str], None] | None, message: str) -> None:
     if callback is not None:
         callback(message)
+
+
+def _report_large_case(
+    progress: Callable[[str], None] | None,
+    *,
+    backend: str,
+    split_name: str,
+    done: int,
+    total: int,
+    case: ProjectCase,
+) -> None:
+    source_bytes = sum(
+        len(source.encode("utf-8")) for source in case.source_files.values()
+    )
+    if source_bytes < 1 * 1024 * 1024:
+        return
+    _progress(
+        progress,
+        f"      {backend}/{split_name}: starting {done}/{total} "
+        f"{case.case_id} ({case.project_id}, {source_bytes / (1024 * 1024):.2f} MiB)",
+    )

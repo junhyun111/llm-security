@@ -4,6 +4,7 @@ from ..models import Candidate, ProjectCase
 from .analyzer import StructuralAnalyzer
 from .api_semantics import ApiCatalog
 from .candidate_builder import SemanticCandidateBuilder
+from .frontend import TreeSitterFrontend
 from .semantic_analyzer import SemanticAnalyzer
 
 
@@ -17,11 +18,18 @@ class SemanticStaticAnalyzer:
         semantic_analyzer: SemanticAnalyzer | None = None,
         candidate_builder: SemanticCandidateBuilder | None = None,
         catalog: ApiCatalog | None = None,
+        max_source_bytes: int | None = 2 * 1024 * 1024,
+        parse_timeout_ms: int | None = 30_000,
     ) -> None:
         selected_catalog = catalog or (
             semantic_analyzer.catalog if semantic_analyzer is not None else ApiCatalog.default()
         )
-        self.structural_analyzer = structural_analyzer or StructuralAnalyzer()
+        self.structural_analyzer = structural_analyzer or StructuralAnalyzer(
+            frontend=TreeSitterFrontend(
+                max_source_bytes=max_source_bytes,
+                parse_timeout_ms=parse_timeout_ms,
+            )
+        )
         self.semantic_analyzer = semantic_analyzer or SemanticAnalyzer(selected_catalog)
         self.candidate_builder = candidate_builder or SemanticCandidateBuilder(
             catalog=selected_catalog

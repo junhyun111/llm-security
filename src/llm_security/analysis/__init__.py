@@ -26,7 +26,7 @@ from .dataflow import (
     SliceStep,
     backward_slice,
 )
-from .frontend import TreeSitterFrontend
+from .frontend import AnalysisLimitError, TreeSitterFrontend
 from .evidence_normalizer import SemanticEvidenceNormalizer
 from .features import (
     FACT_FEATURE_MAP,
@@ -69,6 +69,7 @@ from .taint import TaintAnalyzer, TaintPath
 __all__ = [
     "Assignment",
     "AllocationSpec",
+    "AnalysisLimitError",
     "ApiCatalog",
     "CandidateAnalyzer",
     "CallSite",

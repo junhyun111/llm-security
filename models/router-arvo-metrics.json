@@ -17,7 +17,7 @@
     "average_top1_confidence": 0.39325333868147344,
     "average_top1_top2_margin": 0.08473126327752041,
     "expected_calibration_error": 0.15466127752250106,
-    "routing_latency_ms": 0.2043445025331765,
+    "routing_latency_ms": 0.38833874344815994,
     "llm_calls_saved": 1540,
     "sample_count": 382
   },
@@ -30,7 +30,7 @@
     "average_top1_confidence": 0.38324724001231003,
     "average_top1_top2_margin": 0.07157549153290156,
     "expected_calibration_error": 0.1831203937889749,
-    "routing_latency_ms": 0.20987521183688856,
+    "routing_latency_ms": 0.2985336863183243,
     "llm_calls_saved": 1897,
     "sample_count": 472
   }

@@ -21,6 +21,7 @@ class AnalyzerMetrics:
     mean_candidate_loc: float
     median_candidate_loc: float
     analysis_latency_ms_per_case: float
+    analysis_error_count: int = 0
 
 
 @dataclass(slots=True)

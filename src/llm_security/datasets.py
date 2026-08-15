@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from .models import Candidate, Evidence, ExpertFamily, GroundTruth, ProjectCase, to_dict
 
@@ -23,43 +23,47 @@ def write_cases_jsonl(cases: Iterable[ProjectCase], path: str | Path) -> None:
 
 
 def load_cases_jsonl(path: str | Path) -> list[ProjectCase]:
-    cases: list[ProjectCase] = []
+    return list(iter_cases_jsonl(path))
+
+
+def iter_cases_jsonl(path: str | Path) -> Iterator[ProjectCase]:
+    """Yield one case at a time so large source corpora stay off the heap."""
     with Path(path).open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
             try:
                 raw = json.loads(line)
-                truths = [
-                    GroundTruth(
-                        truth_id=item["truth_id"],
-                        file=item["file"],
-                        function=item["function"],
-                        line_start=int(item["line_start"]),
-                        line_end=int(item["line_end"]),
-                        experts=[ExpertFamily(value) for value in item.get("experts", [])],
-                        cwes=[str(value) for value in item.get("cwes", [])],
-                    )
-                    for item in raw.get("ground_truth", [])
-                ]
-                cases.append(
-                    ProjectCase(
-                        case_id=raw["case_id"],
-                        project_id=raw["project_id"],
-                        source_files={
-                            str(name): str(content)
-                            for name, content in raw["source_files"].items()
-                        },
-                        split=raw.get("split", "dev"),
-                        vulnerable_revision=raw.get("vulnerable_revision"),
-                        fixed_revision=raw.get("fixed_revision"),
-                        ground_truth=truths,
-                        metadata=dict(raw.get("metadata", {})),
-                    )
-                )
+                yield _case_from_raw(raw)
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
                 raise ValueError(f"Invalid case JSONL at line {line_number}: {error}") from error
-    return cases
+
+
+def _case_from_raw(raw: dict) -> ProjectCase:
+    truths = [
+        GroundTruth(
+            truth_id=item["truth_id"],
+            file=item["file"],
+            function=item["function"],
+            line_start=int(item["line_start"]),
+            line_end=int(item["line_end"]),
+            experts=[ExpertFamily(value) for value in item.get("experts", [])],
+            cwes=[str(value) for value in item.get("cwes", [])],
+        )
+        for item in raw.get("ground_truth", [])
+    ]
+    return ProjectCase(
+        case_id=raw["case_id"],
+        project_id=raw["project_id"],
+        source_files={
+            str(name): str(content) for name, content in raw["source_files"].items()
+        },
+        split=raw.get("split", "dev"),
+        vulnerable_revision=raw.get("vulnerable_revision"),
+        fixed_revision=raw.get("fixed_revision"),
+        ground_truth=truths,
+        metadata=dict(raw.get("metadata", {})),
+    )
 
 
 def write_router_samples_jsonl(samples: Iterable[RouterSample], path: str | Path) -> None:

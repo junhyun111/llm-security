@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
+import random
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from ..arvo import split_cases_by_project
-from ..models import ProjectCase
+from ..datasets import iter_cases_jsonl
+from ..models import ProjectCase, to_dict
 from .io import sorted_jsonl, write_json
 
 
@@ -13,6 +17,13 @@ from .io import sorted_jsonl, write_json
 class FrozenProjectSplit:
     seed: int
     cases: dict[str, list[ProjectCase]]
+    manifest: dict[str, object]
+
+
+@dataclass(slots=True)
+class FrozenProjectFiles:
+    seed: int
+    files: dict[str, Path]
     manifest: dict[str, object]
 
 
@@ -52,6 +63,101 @@ def freeze_project_split(
         )
     write_json(manifest, destination / "split_manifest.json")
     return FrozenProjectSplit(seed=seed, cases=splits, manifest=manifest)
+
+
+def freeze_project_split_jsonl(
+    cases_path: str | Path,
+    output_directory: str | Path,
+    *,
+    seed: int = 2026,
+    progress: Callable[[str], None] | None = None,
+) -> FrozenProjectFiles:
+    """Freeze a split with two streaming passes and no corpus-sized list."""
+    source = Path(cases_path)
+    destination = Path(output_directory)
+    destination.mkdir(parents=True, exist_ok=True)
+    project_case_counts: Counter[str] = Counter()
+    project_family_counts: dict[str, Counter[str]] = {}
+    case_count = 0
+    for case_count, case in enumerate(iter_cases_jsonl(source), start=1):
+        project_case_counts[case.project_id] += 1
+        distribution = project_family_counts.setdefault(case.project_id, Counter())
+        distribution.update(
+            family.value
+            for truth in case.ground_truth
+            for family in truth.experts
+        )
+        if progress is not None and case_count % 250 == 0:
+            progress(f"      split scan: {case_count} cases")
+    if case_count == 0:
+        raise ValueError(f"No cases found in {source}")
+
+    project_to_split = _project_assignment(list(project_case_counts), seed=seed)
+    files = {
+        split: destination / f"cases_{split}.jsonl"
+        for split in ("train", "dev", "test")
+    }
+    split_counts = Counter()
+    handles = {
+        split: path.open("w", encoding="utf-8", newline="\n")
+        for split, path in files.items()
+    }
+    try:
+        for index, case in enumerate(iter_cases_jsonl(source), start=1):
+            split = project_to_split[case.project_id]
+            case.split = split
+            handles[split].write(
+                json.dumps(to_dict(case), ensure_ascii=False, sort_keys=True) + "\n"
+            )
+            split_counts[split] += 1
+            if progress is not None and index % 250 == 0:
+                progress(f"      split write: {index}/{case_count} cases")
+    finally:
+        for handle in handles.values():
+            handle.close()
+
+    manifest: dict[str, object] = {
+        "seed": seed,
+        "split_policy": "project-disjoint 70/15/15",
+        "case_count": case_count,
+        "streaming": True,
+        "splits": {},
+    }
+    for split in ("train", "dev", "test"):
+        projects = sorted(
+            project for project, assigned in project_to_split.items() if assigned == split
+        )
+        family_distribution: Counter[str] = Counter()
+        for project in projects:
+            family_distribution.update(project_family_counts[project])
+        manifest["splits"][split] = {  # type: ignore[index]
+            "case_count": split_counts[split],
+            "project_count": len(projects),
+            "projects": projects,
+            "family_distribution": dict(sorted(family_distribution.items())),
+        }
+    write_json(manifest, destination / "split_manifest.json")
+    return FrozenProjectFiles(seed=seed, files=files, manifest=manifest)
+
+
+def _project_assignment(projects: list[str], *, seed: int) -> dict[str, str]:
+    ordered = sorted(projects)
+    if len(ordered) < 3:
+        raise ValueError("At least three projects are required for project-level splits")
+    random.Random(seed).shuffle(ordered)
+    test_count = max(1, round(len(ordered) * 0.15))
+    dev_count = max(1, round(len(ordered) * 0.15))
+    train_count = len(ordered) - dev_count - test_count
+    if train_count < 1:
+        raise ValueError("Project split leaves no training projects")
+    return {
+        **{project: "train" for project in ordered[:train_count]},
+        **{
+            project: "dev"
+            for project in ordered[train_count : train_count + dev_count]
+        },
+        **{project: "test" for project in ordered[train_count + dev_count :]},
+    }
 
 
 def _assert_project_disjoint(splits: dict[str, list[ProjectCase]]) -> None:

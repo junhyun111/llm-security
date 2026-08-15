@@ -47,8 +47,28 @@ _FUNCTION_NAME_RE = re.compile(
 )
 
 
+class AnalysisLimitError(RuntimeError):
+    """Raised when a source file exceeds the frontend safety limits."""
+
+
 class TreeSitterFrontend:
     """Convert C/C++ Tree-sitter ASTs into a stable, reusable local IR."""
+
+    def __init__(
+        self,
+        *,
+        # ARVO contains a small number of generated multi-megabyte files.
+        # Repeated AST/IR traversals on those files can dominate a run, so
+        # keep the default conservative and let callers opt into a larger cap.
+        max_source_bytes: int | None = 2 * 1024 * 1024,
+        parse_timeout_ms: int | None = 30_000,
+    ) -> None:
+        if max_source_bytes is not None and max_source_bytes <= 0:
+            raise ValueError("max_source_bytes must be positive or None")
+        if parse_timeout_ms is not None and parse_timeout_ms <= 0:
+            raise ValueError("parse_timeout_ms must be positive or None")
+        self.max_source_bytes = max_source_bytes
+        self.parse_timeout_ms = parse_timeout_ms
 
     def parse_project(self, source_files: dict[str, str]) -> ProgramIR:
         parsed: list[FunctionIR] = []
@@ -79,8 +99,24 @@ class TreeSitterFrontend:
 
     def parse_file(self, file: str, source: str) -> list[FunctionIR]:
         encoded = source.encode("utf-8")
+        if (
+            self.max_source_bytes is not None
+            and len(encoded) > self.max_source_bytes
+        ):
+            raise AnalysisLimitError(
+                f"source file {file!r} is {len(encoded)} bytes; "
+                f"limit is {self.max_source_bytes} bytes"
+            )
         parser = Parser(_language_for(file))
-        tree = parser.parse(encoded)
+        if self.parse_timeout_ms is not None:
+            parser.timeout_micros = self.parse_timeout_ms * 1_000
+        try:
+            tree = parser.parse(encoded)
+        except ValueError as error:
+            raise AnalysisLimitError(
+                f"tree-sitter parse timed out or failed for {file!r} "
+                f"after {self.parse_timeout_ms} ms"
+            ) from error
         function_nodes = sorted(
             (
                 node
@@ -212,9 +248,13 @@ def _language_for(file: str) -> Language:
 
 
 def _walk(node: Node) -> Iterable[Node]:
-    yield node
-    for child in node.children:
-        yield from _walk(child)
+    # Generated C/C++ can contain ASTs deeper than Python's recursion limit.
+    # Preserve pre-order traversal while keeping depth on an explicit stack.
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        stack.extend(reversed(current.children))
 
 
 def _text(node: Node | None, source: bytes) -> str:
@@ -279,22 +319,20 @@ def _expression_symbols(node: Node | None, source: bytes) -> set[str]:
     """Return data symbols while excluding the name part of a call expression."""
     if node is None:
         return set()
-    if node.type == "call_expression":
-        arguments = node.child_by_field_name("arguments")
-        if arguments is None:
-            return set()
-        return {
-            symbol
-            for argument in arguments.named_children
-            for symbol in _expression_symbols(argument, source)
-        }
-    if node.type in {"identifier", "field_identifier"}:
-        return {_text(node, source)}
-    return {
-        symbol
-        for child in node.named_children
-        for symbol in _expression_symbols(child, source)
-    }
+    symbols: set[str] = set()
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type == "call_expression":
+            arguments = current.child_by_field_name("arguments")
+            if arguments is not None:
+                stack.extend(reversed(arguments.named_children))
+            continue
+        if current.type in {"identifier", "field_identifier"}:
+            symbols.add(_text(current, source))
+            continue
+        stack.extend(reversed(current.named_children))
+    return symbols
 
 
 def _expression_info(node: Node | None, source: bytes) -> ExpressionInfo:
