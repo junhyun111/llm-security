@@ -1,5 +1,75 @@
 # LLM Security Conditional Expert Pipeline
 
+## 새 Router 구조와 실행 순서
+
+현재 기본 학습 구조는 single-label Softmax 분류가 아닙니다. `memory_bounds`와
+`control_state_error`를 공통 Anchor로 실행하고, 나머지 Expert가 필요한지만 독립
+binary trigger로 학습합니다. 실제 LLM 결과를 모은 뒤에는
+`P(Expert×Model succeeds | candidate)`를 예측하는 Utility Router로 전환할 수 있습니다.
+기존 `AdaptiveExpertRouter`는 비교 baseline으로만 보존됩니다.
+
+1. semantic Candidate JSONL 준비(이미 있으면 생략):
+
+```powershell
+python -m llm_security.cli phase2e-prepare `
+  --cases data\arvo\cases_all.jsonl `
+  --data-dir data\phase2e `
+  --backend semantic `
+  --seed 2026
+```
+
+2. API 없이 Anchor/Rare Router 학습:
+
+```powershell
+python -m llm_security.cli train-anchor-router `
+  --train data\phase2e\semantic\router_train.jsonl `
+  --dev data\phase2e\semantic\router_dev.jsonl `
+  --output artifacts\phase2e\router_anchor_rare_v1.pkl
+```
+
+같은 작업은 `notebooks/01_train_router.ipynb`를 위에서 아래로 실행해도 됩니다.
+
+3. Utility Router용 Expert×Model 성능 행렬 수집:
+
+`.env`에서 `RUN_PAID_EXPERIMENTS=1`로 바꾸고 먼저 `--max-cases 5`로 호출 수와
+응답 형식을 확인합니다. 수집 결과는 매 요청마다 checkpoint되므로 중단 후 같은
+명령을 실행하면 이어서 진행합니다.
+
+```powershell
+python -m llm_security.cli collect-utility-outcomes `
+  --cases data\phase2e\cases_train.jsonl `
+  --output data\utility\outcomes_train.jsonl `
+  --max-cases 5
+```
+
+검증 데이터도 별도로 수집합니다.
+
+```powershell
+python -m llm_security.cli collect-utility-outcomes `
+  --cases data\phase2e\cases_dev.jsonl `
+  --output data\utility\outcomes_dev.jsonl `
+  --max-cases 5
+```
+
+모델 후보는 `OPENROUTER_SWEEP_MODELS` 또는 `--models model/a,model/b`로 지정합니다.
+Expert별 운영 모델은 `OPENROUTER_MEMORY_MODEL`, `OPENROUTER_LIFETIME_MODEL`,
+`OPENROUTER_INTEGER_MODEL`, `OPENROUTER_TAINT_MODEL`, `OPENROUTER_CONTROL_MODEL`,
+`OPENROUTER_CONCURRENCY_MODEL`로 독립 설정하며, 생략하면
+`OPENROUTER_EXPERT_MODEL`을 사용합니다.
+
+4. 수집된 실제 outcome으로 Utility Router 학습:
+
+```powershell
+python -m llm_security.cli train-utility-router `
+  --train data\utility\outcomes_train.jsonl `
+  --dev data\utility\outcomes_dev.jsonl `
+  --output artifacts\phase2e\router_utility_v1.pkl
+```
+
+`notebooks/02_evaluate_router.ipynb`는 test split의 rare recall, 실제 success
+coverage, 평균 Expert 수, 비용과 regret을 평가합니다. `03_run_agents.ipynb`는 Utility
+artifact가 있으면 그것을 우선 사용하고, 없으면 Anchor/Rare artifact로 실행합니다.
+
 C/C++ 오픈소스에서 정적 분석으로 취약 후보 함수를 찾고, 학습된 Router가 후보별 Expert를 선택한 뒤 OpenRouter LLM으로 분석하는 실험용 파이프라인입니다.
 
 - 구현 코드: `src/llm_security/*.py`

@@ -5,13 +5,47 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator
 
-from .models import Candidate, Evidence, ExpertFamily, GroundTruth, ProjectCase, to_dict
+from .models import (
+    Candidate,
+    Evidence,
+    ExpertAssignment,
+    ExpertFamily,
+    GroundTruth,
+    ProjectCase,
+    to_dict,
+)
 
 
 @dataclass(slots=True)
 class RouterSample:
     candidate: Candidate
     labels: list[ExpertFamily]
+
+
+@dataclass(slots=True)
+class UtilitySample:
+    """Observed result of running one Expert x model assignment."""
+
+    candidate: Candidate
+    assignment: ExpertAssignment
+    success: bool
+    false_positive: bool = False
+    unsupported_claims: int = 0
+    cost: float = 0.0
+
+    def reward(
+        self,
+        *,
+        false_positive_weight: float = 0.5,
+        unsupported_weight: float = 0.25,
+        cost_weight: float = 1.0,
+    ) -> float:
+        return (
+            float(self.success)
+            - false_positive_weight * float(self.false_positive)
+            - unsupported_weight * float(self.unsupported_claims)
+            - cost_weight * self.cost
+        )
 
 
 def write_cases_jsonl(cases: Iterable[ProjectCase], path: str | Path) -> None:
@@ -135,3 +169,100 @@ def load_router_samples_jsonl(path: str | Path) -> list[RouterSample]:
                     f"Invalid router sample JSONL at line {line_number}: {error}"
                 ) from error
     return samples
+
+
+def write_utility_samples_jsonl(
+    samples: Iterable[UtilitySample], path: str | Path
+) -> None:
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", encoding="utf-8") as handle:
+        for sample in samples:
+            handle.write(json.dumps(utility_sample_to_dict(sample), ensure_ascii=False) + "\n")
+
+
+def load_utility_samples_jsonl(path: str | Path) -> list[UtilitySample]:
+    samples: list[UtilitySample] = []
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                raw = json.loads(line)
+                assignment = raw["assignment"]
+                samples.append(
+                    UtilitySample(
+                        candidate=_candidate_from_raw(raw["candidate"]),
+                        assignment=ExpertAssignment(
+                            expert=ExpertFamily(assignment["expert"]),
+                            model_id=str(assignment["model_id"]),
+                            prompt_version=str(
+                                assignment.get("prompt_version", "expert-v2")
+                            ),
+                            expected_cost=float(assignment.get("expected_cost", 0.0)),
+                        ),
+                        success=bool(raw["success"]),
+                        false_positive=bool(raw.get("false_positive", False)),
+                        unsupported_claims=int(raw.get("unsupported_claims", 0)),
+                        cost=float(raw.get("cost", 0.0)),
+                    )
+                )
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                raise ValueError(
+                    f"Invalid utility sample JSONL at line {line_number}: {error}"
+                ) from error
+    return samples
+
+
+def utility_sample_to_dict(sample: UtilitySample) -> dict:
+    """Compact outcome row: Utility training needs features, not duplicated source code."""
+    candidate = sample.candidate
+    return {
+        "candidate": {
+            "candidate_id": candidate.candidate_id,
+            "project_id": candidate.project_id,
+            "file": candidate.file,
+            "function": candidate.function,
+            "line_start": candidate.line_start,
+            "line_end": candidate.line_end,
+            "features": candidate.features,
+            "suspicion_score": candidate.suspicion_score,
+            "feature_schema_version": candidate.feature_schema_version,
+        },
+        "assignment": to_dict(sample.assignment),
+        "success": sample.success,
+        "false_positive": sample.false_positive,
+        "unsupported_claims": sample.unsupported_claims,
+        "cost": sample.cost,
+    }
+
+
+def _candidate_from_raw(item: dict) -> Candidate:
+    return Candidate(
+        candidate_id=item["candidate_id"],
+        project_id=item["project_id"],
+        file=item["file"],
+        function=item["function"],
+        line_start=int(item["line_start"]),
+        line_end=int(item["line_end"]),
+        code=item.get("code", ""),
+        evidence=[
+            Evidence(
+                evidence_id=evidence["evidence_id"],
+                kind=evidence["kind"],
+                file=evidence["file"],
+                line=int(evidence["line"]),
+                expression=evidence["expression"],
+                function=str(evidence.get("function", item["function"])),
+                subject=evidence.get("subject"),
+                object=evidence.get("object"),
+                facts=dict(evidence.get("facts", {})),
+            )
+            for evidence in item.get("evidence", [])
+        ],
+        features={str(key): float(value) for key, value in item["features"].items()},
+        suspicion_score=float(item.get("suspicion_score", item.get("static_score", 0.0))),
+        callers=[str(value) for value in item.get("callers", [])],
+        callees=[str(value) for value in item.get("callees", [])],
+        feature_schema_version=str(item.get("feature_schema_version", "legacy-v1")),
+    )

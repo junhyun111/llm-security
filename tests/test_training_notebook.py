@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 
-def test_phase2e_training_notebook_is_valid_and_offline():
+def test_router_training_notebook_is_valid_and_offline():
     path = Path(__file__).parents[1] / "notebooks" / "01_train_router.ipynb"
     notebook = json.loads(path.read_text(encoding="utf-8"))
     code = "\n".join(
@@ -17,6 +17,32 @@ def test_phase2e_training_notebook_is_valid_and_offline():
             compile("".join(cell.get("source", [])), f"notebook-cell-{index}", "exec")
     assert "data' / 'phase2e" in code
     assert "artifacts' / 'phase2e" in code
-    assert "router_legacy_v1.pkl" in code
-    assert "router_semantic_v1.pkl" in code
+    assert "router_anchor_rare_v1.pkl" in code
+    assert "router_utility_v1.pkl" in code
+    assert "AnchorRareRouter.fit" in code
+    assert "BudgetedUtilityRouter.fit" in code
     assert "OPENROUTER" not in code.upper()
+
+
+def test_evaluation_and_agent_notebooks_are_valid_and_separated():
+    root = Path(__file__).parents[1] / "notebooks"
+    evaluation = json.loads((root / "02_evaluate_router.ipynb").read_text(encoding="utf-8"))
+    agents = json.loads((root / "03_run_agents.ipynb").read_text(encoding="utf-8"))
+    evaluation_code = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in evaluation["cells"]
+        if cell["cell_type"] == "code"
+    )
+    agent_code = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in agents["cells"]
+        if cell["cell_type"] == "code"
+    )
+    for notebook in (evaluation, agents):
+        for index, cell in enumerate(notebook["cells"]):
+            if cell["cell_type"] == "code":
+                compile("".join(cell.get("source", [])), f"notebook-cell-{index}", "exec")
+    assert "BudgetedUtilityRouter.evaluate" not in evaluation_code
+    assert ".evaluate(" in evaluation_code
+    assert "build_pipeline" not in evaluation_code
+    assert "build_pipeline" in agent_code

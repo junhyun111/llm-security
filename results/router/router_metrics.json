@@ -1,0 +1,18 @@
+{
+  "artifact": "C:\\Users\\junhyun111\\Desktop\\llm-security\\artifacts\\phase2e\\router_anchor_rare_v1.pkl",
+  "fixed_top2_exact_coverage": 0.8838821490467937,
+  "anchor_rare": {
+    "sample_count": 577,
+    "expert_coverage": 0.9965337954939342,
+    "exact_coverage": 0.9965337954939342,
+    "rare_recall": 0.9701492537313433,
+    "rare_precision": 0.1267056530214425,
+    "rare_trigger_rate": 0.8890814558058926,
+    "average_experts_per_candidate": 2.8890814558058926,
+    "llm_calls_saved_vs_all_six": 1795
+  },
+  "utility": {
+    "evaluated": false,
+    "reason": "Utility artifact or outcomes_test.jsonl not found"
+  }
+}

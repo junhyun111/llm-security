@@ -14,6 +14,20 @@ class ExpertFamily(str, Enum):
     CONCURRENCY_TOCTOU = "concurrency_toctou"
 
 
+@dataclass(frozen=True, slots=True)
+class ExpertAssignment:
+    """One executable Expert prompt and LLM model combination."""
+
+    expert: ExpertFamily
+    model_id: str
+    prompt_version: str = "expert-v2"
+    expected_cost: float = 0.0
+
+    @property
+    def assignment_id(self) -> str:
+        return f"{self.expert.value}::{self.model_id}::{self.prompt_version}"
+
+
 class ValidationVerdict(str, Enum):
     VALIDATED = "validated"
     UNCERTAIN = "uncertain"
@@ -127,6 +141,8 @@ class RouteDecision:
     available_families: list[ExpertFamily] = field(default_factory=list)
     learned_scores: dict[ExpertFamily, float] = field(default_factory=dict)
     trigger_scores: dict[ExpertFamily, float] = field(default_factory=dict)
+    assignments: list[ExpertAssignment] = field(default_factory=list)
+    expected_cost: float = 0.0
 
 
 @dataclass(slots=True)
@@ -148,6 +164,14 @@ class Finding:
     trigger_path: list[str]
     evidence_ids: list[str]
     confidence: float
+    preconditions: list[str] = field(default_factory=list)
+    evidence_for: list[str] = field(default_factory=list)
+    evidence_against: list[str] = field(default_factory=list)
+    falsification_test: str | None = None
+    model_id: str | None = None
+    prompt_version: str | None = None
+    supporting_experts: list[ExpertFamily] = field(default_factory=list)
+    supporting_models: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

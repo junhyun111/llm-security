@@ -3,16 +3,36 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from itertools import islice
 from pathlib import Path
 
 from .arvo import prepare_arvo_cases, prepare_arvo_training_dataset
 from .config import AppConfig
-from .datasets import load_cases_jsonl, load_router_samples_jsonl, write_cases_jsonl
+from .analysis import SemanticStaticAnalyzer
+from .datasets import (
+    load_cases_jsonl,
+    iter_cases_jsonl,
+    load_router_samples_jsonl,
+    load_utility_samples_jsonl,
+    write_cases_jsonl,
+)
+from .experts import ExpertRunner
 from .experiment import ExperimentRunner
-from .experiments import Phase2EConfig, prepare_phase2e_jsonl, run_phase2e_jsonl
-from .factory import build_pipeline
-from .models import ProjectCase, to_dict
-from .routing import AdaptiveExpertRouter, RoutingPolicyConfig
+from .experiments import (
+    Phase2EConfig,
+    collect_expert_outcomes,
+    prepare_phase2e_jsonl,
+    run_phase2e_jsonl,
+)
+from .factory import build_context_builder, build_openrouter_client, build_pipeline
+from .models import ExpertAssignment, ExpertFamily, ProjectCase, to_dict
+from .routing import (
+    AdaptiveExpertRouter,
+    AnchorRareRouter,
+    BudgetedUtilityRouter,
+    RoutingPolicyConfig,
+    UtilityPolicyConfig,
+)
 
 
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp"}
@@ -34,6 +54,54 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train_parser.add_argument("--env-file", default=".env")
     train_parser.add_argument("--output", default="router.pkl")
+
+    anchor_parser = subparsers.add_parser(
+        "train-anchor-router",
+        help="Train common-family anchors plus high-recall rare Expert triggers",
+    )
+    anchor_parser.add_argument("--train", required=True)
+    anchor_parser.add_argument("--dev", required=True)
+    anchor_parser.add_argument("--env-file", default=".env")
+    anchor_parser.add_argument("--target-rare-recall", type=float, default=0.95)
+    anchor_parser.add_argument("--output", default="models/router-anchor-rare.pkl")
+
+    utility_parser = subparsers.add_parser(
+        "train-utility-router",
+        help="Train P(Expert x model succeeds | candidate) from measured outcomes",
+    )
+    utility_parser.add_argument("--train", required=True)
+    utility_parser.add_argument("--dev", required=True)
+    utility_parser.add_argument("--env-file", default=".env")
+    utility_parser.add_argument("--max-assignments", type=int, default=3)
+    utility_parser.add_argument("--max-expected-cost", type=float, default=0.0)
+    utility_parser.add_argument("--min-success-probability", type=float, default=0.20)
+    utility_parser.add_argument("--cost-weight", type=float, default=1.0)
+    utility_parser.add_argument("--false-positive-weight", type=float, default=0.50)
+    utility_parser.add_argument("--unsupported-weight", type=float, default=0.25)
+    utility_parser.add_argument("--output", default="models/router-utility.pkl")
+
+    collect_parser = subparsers.add_parser(
+        "collect-utility-outcomes",
+        help="Run an Expert x OpenRouter model matrix and checkpoint Utility Router GT",
+    )
+    collect_parser.add_argument("--cases", required=True)
+    collect_parser.add_argument("--output", required=True)
+    collect_parser.add_argument("--env-file", default=".env")
+    collect_parser.add_argument(
+        "--models",
+        default="",
+        help="Comma-separated model IDs; defaults to sweep/per-Expert model settings",
+    )
+    collect_parser.add_argument(
+        "--families",
+        default=",".join(family.value for family in ExpertFamily),
+        help="Comma-separated Expert families",
+    )
+    collect_parser.add_argument("--max-cases", type=int, default=0)
+    collect_parser.add_argument("--max-candidates-per-case", type=int, default=4)
+    collect_parser.add_argument("--hard-negatives-per-case", type=int, default=1)
+    collect_parser.add_argument("--no-resume", action="store_true")
+    _add_semantic_safety_options(collect_parser)
 
     analyze_parser = subparsers.add_parser(
         "analyze", help="Analyze a C/C++ source file or directory through OpenRouter"
@@ -150,6 +218,90 @@ def main(argv: list[str] | None = None) -> int:
                 indent=2,
             )
         )
+        return 0
+    if args.command == "train-anchor-router":
+        config = AppConfig.from_env(args.env_file)
+        router = AnchorRareRouter.fit(
+            load_router_samples_jsonl(args.train), seed=config.runtime.seed
+        )
+        calibration = router.calibrate_threshold(
+            load_router_samples_jsonl(args.dev),
+            target_rare_recall=args.target_rare_recall,
+        )
+        metrics = router.evaluate(load_router_samples_jsonl(args.dev))
+        router.save(args.output)
+        print(
+            json.dumps(
+                {"calibration": to_dict(calibration), "metrics": to_dict(metrics)},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "train-utility-router":
+        config = AppConfig.from_env(args.env_file)
+        policy = UtilityPolicyConfig(
+            max_assignments=args.max_assignments,
+            max_expected_cost=args.max_expected_cost,
+            minimum_success_probability=args.min_success_probability,
+            cost_weight=args.cost_weight,
+            false_positive_weight=args.false_positive_weight,
+            unsupported_weight=args.unsupported_weight,
+        )
+        router = BudgetedUtilityRouter.fit(
+            load_utility_samples_jsonl(args.train),
+            policy=policy,
+            seed=config.runtime.seed,
+        )
+        metrics = router.evaluate(load_utility_samples_jsonl(args.dev))
+        router.save(args.output)
+        print(json.dumps({"metrics": to_dict(metrics)}, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "collect-utility-outcomes":
+        config = AppConfig.from_env(args.env_file)
+        if not config.runtime.allow_paid_experiments:
+            raise RuntimeError(
+                "Outcome collection calls OpenRouter. Set RUN_PAID_EXPERIMENTS=1 "
+                "after checking the selected model matrix and budget."
+            )
+        families = tuple(
+            ExpertFamily(item.strip()) for item in args.families.split(",") if item.strip()
+        )
+        explicit_models = tuple(
+            item.strip() for item in args.models.split(",") if item.strip()
+        )
+        model_pool = explicit_models or config.model.sweep_models or tuple(
+            dict.fromkeys(config.model.expert_models.values())
+        )
+        assignments = [
+            ExpertAssignment(family, model_id)
+            for family in families
+            for model_id in model_pool
+        ]
+        cases = iter_cases_jsonl(args.cases)
+        if args.max_cases:
+            cases = islice(cases, args.max_cases)
+        client = build_openrouter_client(config)
+        summary = collect_expert_outcomes(
+            cases,
+            analyzer=SemanticStaticAnalyzer(
+                max_source_bytes=_source_limit_bytes(args.max_source_mb),
+                parse_timeout_ms=_parse_timeout_ms(args.parse_timeout_seconds),
+            ),
+            expert_runner=ExpertRunner(
+                client=client,
+                model=config.model.expert_model,
+                context_builder=build_context_builder(config),
+                models_by_family=config.model.expert_models,
+            ),
+            assignments=assignments,
+            output_path=args.output,
+            max_candidates_per_case=args.max_candidates_per_case,
+            hard_negatives_per_case=args.hard_negatives_per_case,
+            resume=not args.no_resume,
+            progress=print,
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0
     if args.command == "analyze":
         config = AppConfig.from_env(args.env_file)
@@ -277,7 +429,17 @@ def _load_router(config: AppConfig, artifact: str | None):
             "Adaptive routing requires --router-artifact. "
             "Create one with 01_train_router.ipynb or train-router."
         )
-    return AdaptiveExpertRouter.load(artifact)
+    errors: list[str] = []
+    for router_class in (
+        BudgetedUtilityRouter,
+        AnchorRareRouter,
+        AdaptiveExpertRouter,
+    ):
+        try:
+            return router_class.load(artifact)
+        except TypeError as error:
+            errors.append(str(error))
+    raise TypeError("Unsupported Router artifact: " + " | ".join(errors))
 
 
 def _routing_policy_config(config: AppConfig) -> RoutingPolicyConfig:

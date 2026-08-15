@@ -6,15 +6,16 @@ from .config import AppConfig
 from .evidence import ContextBuilder
 from .experts import ExpertRunner
 from .llm import OpenRouterClient
+from .knowledge import LocalSecurityKnowledgeRetriever
 from .pipeline import VulnerabilityPipeline
 from .routing import CandidateGate, Router
 from .static_analysis import LightweightStaticAnalyzer
 from .validation import EvidenceValidator
 
 
-def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
+def build_openrouter_client(config: AppConfig) -> OpenRouterClient:
     config.validate()
-    client = OpenRouterClient(
+    return OpenRouterClient(
         api_key=config.model.api_key,
         timeout_seconds=config.runtime.request_timeout_seconds,
         max_retries=config.runtime.max_retries,
@@ -25,6 +26,24 @@ def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
         provider=config.model.provider,
         structured_output=config.model.structured_output,
     )
+
+
+def build_context_builder(config: AppConfig) -> ContextBuilder:
+    knowledge_retriever = (
+        LocalSecurityKnowledgeRetriever.from_jsonl(
+            config.analysis.security_knowledge_path
+        )
+        if config.analysis.security_knowledge_path
+        else None
+    )
+    return ContextBuilder(
+        config.analysis.max_context_characters,
+        knowledge_retriever=knowledge_retriever,
+    )
+
+
+def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
+    client = build_openrouter_client(config)
     analyzer = (
         SemanticStaticAnalyzer()
         if config.analysis.backend == "semantic"
@@ -39,14 +58,17 @@ def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
         expert_runner=ExpertRunner(
             client=client,
             model=config.model.expert_model,
-            context_builder=ContextBuilder(config.analysis.max_context_characters),
+            context_builder=build_context_builder(config),
+            models_by_family=config.model.expert_models,
         ),
         aggregator=FindingAggregator(),
         validator=EvidenceValidator(
             minimum_confidence=config.validation.minimum_confidence,
             client=client,
             model=config.model.validator_model,
+            strong_model=config.model.strong_model,
             use_llm_for_uncertain=config.validation.use_llm_for_uncertain,
+            falsify_all_supported=config.validation.falsify_all_supported,
         ),
         candidate_gate=CandidateGate(
             enabled=config.candidate_gate.enabled,

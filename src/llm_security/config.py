@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .models import ExpertFamily
+
 
 DEFAULT_EXPERT_MODEL = "openai/gpt-5.4-mini"
 DEFAULT_VALIDATOR_MODEL = "anthropic/claude-sonnet-4.5"
@@ -15,6 +17,7 @@ DEFAULT_STRONG_MODEL = "openai/gpt-5.4"
 class ModelConfig:
     api_key: str | None = None
     expert_model: str = DEFAULT_EXPERT_MODEL
+    expert_models: dict[ExpertFamily, str] = field(default_factory=dict)
     validator_model: str = DEFAULT_VALIDATOR_MODEL
     patch_model: str = DEFAULT_PATCH_MODEL
     strong_model: str | None = DEFAULT_STRONG_MODEL
@@ -49,12 +52,14 @@ class AnalysisConfig:
     max_candidates_per_project: int = 50
     context_lines: int = 25
     max_context_characters: int = 30_000
+    security_knowledge_path: str | None = None
 
 
 @dataclass(slots=True)
 class ValidationConfig:
     minimum_confidence: float = 0.60
     use_llm_for_uncertain: bool = True
+    falsify_all_supported: bool = True
 
 
 @dataclass(slots=True)
@@ -84,10 +89,18 @@ class AppConfig:
             for item in values.get("OPENROUTER_SWEEP_MODELS", "").split(",")
             if item.strip()
         )
+        default_expert_model = values.get(
+            "OPENROUTER_EXPERT_MODEL", DEFAULT_EXPERT_MODEL
+        )
+        expert_models = {
+            family: values.get(env_name, default_expert_model)
+            for family, env_name in _EXPERT_MODEL_ENV.items()
+        }
         config = cls(
             model=ModelConfig(
                 api_key=_optional(values.get("OPENROUTER_API_KEY")),
-                expert_model=values.get("OPENROUTER_EXPERT_MODEL", DEFAULT_EXPERT_MODEL),
+                expert_model=default_expert_model,
+                expert_models=expert_models,
                 validator_model=values.get(
                     "OPENROUTER_VALIDATOR_MODEL", DEFAULT_VALIDATOR_MODEL
                 ),
@@ -132,11 +145,17 @@ class AppConfig:
                 max_candidates_per_project=int(values.get("MAX_CANDIDATES", "50")),
                 context_lines=int(values.get("CONTEXT_LINES", "25")),
                 max_context_characters=int(values.get("MAX_CONTEXT_CHARACTERS", "30000")),
+                security_knowledge_path=_optional(
+                    values.get("SECURITY_KNOWLEDGE_PATH")
+                ),
             ),
             validation=ValidationConfig(
                 minimum_confidence=float(values.get("MINIMUM_CONFIDENCE", "0.60")),
                 use_llm_for_uncertain=_as_bool(
                     values.get("USE_LLM_FOR_UNCERTAIN", "true")
+                ),
+                falsify_all_supported=_as_bool(
+                    values.get("FALSIFY_ALL_SUPPORTED", "true")
                 ),
             ),
             runtime=RuntimeConfig(
@@ -173,11 +192,22 @@ class AppConfig:
             self.model.expert_model,
             self.model.validator_model,
             self.model.patch_model,
+            *self.model.expert_models.values(),
         ):
             if not model_id:
                 raise ValueError("OpenRouter role model names cannot be empty")
             if model_id.startswith("~"):
                 raise ValueError("Experiments require canonical model IDs, not latest aliases")
+
+
+_EXPERT_MODEL_ENV = {
+    ExpertFamily.MEMORY_BOUNDS: "OPENROUTER_MEMORY_MODEL",
+    ExpertFamily.LIFETIME_RESOURCE: "OPENROUTER_LIFETIME_MODEL",
+    ExpertFamily.INTEGER_SIZE_TYPE: "OPENROUTER_INTEGER_MODEL",
+    ExpertFamily.TAINT_API_CONTRACT: "OPENROUTER_TAINT_MODEL",
+    ExpertFamily.CONTROL_STATE_ERROR: "OPENROUTER_CONTROL_MODEL",
+    ExpertFamily.CONCURRENCY_TOCTOU: "OPENROUTER_CONCURRENCY_MODEL",
+}
 
 
 def _read_env_file(path: str | Path) -> dict[str, str]:
