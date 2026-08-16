@@ -23,6 +23,7 @@ from .experiments import (
     Phase2EConfig,
     collect_expert_outcomes,
     evaluate_utility_end_to_end,
+    prepare_phase2e_frozen_jsonl,
     prepare_phase2e_jsonl,
     run_phase2e_jsonl,
     write_utility_tradeoff_report,
@@ -251,6 +252,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     juliet_parser.add_argument("--max-cases", type=int, default=0)
+    juliet_parser.add_argument("--max-cases-per-family", type=int, default=100)
+    juliet_parser.add_argument("--max-cases-per-cwe", type=int, default=50)
+    juliet_parser.add_argument("--max-cases-per-template", type=int, default=10)
     juliet_parser.add_argument("--seed", type=int, default=2026)
 
     merge_parser = subparsers.add_parser(
@@ -282,6 +286,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     phase2e_prepare_parser.add_argument(
         "--cases", default="data/arvo/cases_all.jsonl"
+    )
+    phase2e_prepare_parser.add_argument(
+        "--frozen-splits-dir",
+        default="",
+        help="Use existing cases_train/dev/test JSONL without reshuffling them.",
     )
     phase2e_prepare_parser.add_argument("--data-dir", default="data/phase2e")
     phase2e_prepare_parser.add_argument("--seed", type=int, default=2026)
@@ -629,6 +638,10 @@ def main(argv: list[str] | None = None) -> int:
             families=families,
             seed=args.seed,
             max_cases=args.max_cases,
+            max_cases_per_family=args.max_cases_per_family,
+            max_cases_per_cwe=args.max_cases_per_cwe,
+            max_cases_per_template=args.max_cases_per_template,
+            progress=print,
         )
         print(f"Juliet splits saved to {args.output_dir}")
         print(json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -659,8 +672,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result["manifest"], ensure_ascii=False, indent=2))
         return 0
     if args.command == "phase2e-prepare":
-        summary = prepare_phase2e_jsonl(
-            args.cases,
+        preparation = (
+            prepare_phase2e_frozen_jsonl
+            if args.frozen_splits_dir
+            else prepare_phase2e_jsonl
+        )
+        source = args.frozen_splits_dir or args.cases
+        summary = preparation(
+            source,
             config=Phase2EConfig(
                 seed=args.seed,
                 semantic_max_source_bytes=_source_limit_bytes(args.max_source_mb),

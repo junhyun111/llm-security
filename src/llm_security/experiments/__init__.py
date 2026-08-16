@@ -2,6 +2,7 @@
 
 from .phase2e import (
     Phase2EConfig,
+    prepare_phase2e_frozen_jsonl,
     prepare_phase2e_jsonl,
     run_phase2e,
     run_phase2e_jsonl,
@@ -12,6 +13,7 @@ from .utility_reporting import write_utility_tradeoff_report
 
 __all__ = [
     "Phase2EConfig",
+    "prepare_phase2e_frozen_jsonl",
     "prepare_phase2e_jsonl",
     "run_phase2e",
     "run_phase2e_jsonl",

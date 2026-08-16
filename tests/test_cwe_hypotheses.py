@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from llm_security.analysis import SemanticStaticAnalyzer
+from llm_security.cwe import expert_for_cwe
 from llm_security.datasets import (
     RouterSample,
     load_router_samples_jsonl,
@@ -145,3 +146,7 @@ def test_anchor_router_rejects_pre_cwe_feature_schema() -> None:
 
     with pytest.raises(ValueError, match="semantic-cwe-v2"):
         AnchorRareRouter.fit([sample])
+
+
+def test_unlock_without_lock_routes_to_concurrency_expert() -> None:
+    assert expert_for_cwe("CWE-832") == ExpertFamily.CONCURRENCY_TOCTOU

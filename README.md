@@ -1,5 +1,42 @@
 # LLM Security Conditional Expert Pipeline
 
+## ARVO + Juliet Router 학습 빠른 실행
+
+`notebooks/01_train_router.ipynb`를 열고 셀을 위에서부터 실행하면 됩니다. 기본 설정은
+다음 Juliet 경로를 자동으로 사용합니다.
+
+```text
+C:\Users\junhyun111\Downloads\2017-10-01-juliet-test-suite-for-c-cplusplus-v1-3
+```
+
+경로가 다르면 첫 번째 코드 셀의 `JULIET_SOURCE`를 바꾸거나 Jupyter를 실행하기 전에
+`JULIET_SOURCE_DIR` 환경 변수를 설정합니다. 노트북은 다음 작업을 자동으로 수행합니다.
+
+1. Juliet에서 E3 Integer, E4 Taint/API, E6 Concurrency 사례를 family/CWE별로 균형 추출
+2. 번호만 다른 flow variant를 같은 template project로 묶어 train/dev/test 누수 방지
+3. 100 case마다 체크포인트를 저장하며 Juliet만 semantic 정적 분석
+4. 기존 ARVO Router JSONL과 Juliet Router JSONL을 `data/phase2e_combined`에 병합
+5. 합친 표본으로 Anchor/Rare Router 학습 및 dev threshold 보정
+
+중단 후 노트북을 다시 실행하면 정적 분석 체크포인트에서 이어집니다. 처음부터 다시 만들
+때만 설정 셀의 `REBUILD_JULIET`, `REBUILD_JULIET_FEATURES` 중 필요한 값을 `True`로
+바꾸십시오. 기존 `data/phase2e/semantic` ARVO 분석 결과는 재사용하므로 ARVO 4,160개를
+다시 분석하지 않습니다. 학습 모델은
+`artifacts/phase2e/router_anchor_rare_v2.pkl`에 저장됩니다. 이 과정에는 OpenRouter API key가
+필요하지 않습니다. 실제 Expert 실행 결과가 `data/utility/outcomes_train.jsonl`과
+`outcomes_dev.jsonl`에 있을 때만 Utility Router도 추가로 학습합니다.
+
+CLI로 Juliet feature 전처리만 수행하려면 고정 분할을 명시합니다. 그 뒤 compact Router
+JSONL 병합과 학습은 노트북이 수행합니다.
+
+```powershell
+python -m llm_security.cli phase2e-prepare `
+  --frozen-splits-dir data\juliet `
+  --data-dir data\phase2e_juliet `
+  --backend semantic `
+  --seed 2026
+```
+
 ## 웹 기반 프로젝트 분석 및 승인형 수정
 
 로컬 웹에서 프로젝트 폴더 전체를 선택하면 업로드 직후 분석 작업이 시작됩니다.

@@ -81,9 +81,9 @@ class ApiCatalog:
                 "printf": SinkSpec((0,)),
                 "fprintf": SinkSpec((1,)),
             },
-            thread_spawn={"pthread_create"},
-            lock_acquire={"pthread_mutex_lock"},
-            lock_release={"pthread_mutex_unlock"},
+            thread_spawn={"pthread_create", "stdThreadCreate"},
+            lock_acquire={"pthread_mutex_lock", "stdThreadLockAcquire"},
+            lock_release={"pthread_mutex_unlock", "stdThreadLockRelease"},
             toctou_checks={"access": (0,), "stat": (0,), "lstat": (0,)},
             toctou_uses={
                 "open": (0,),

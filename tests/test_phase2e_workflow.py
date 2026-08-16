@@ -7,6 +7,7 @@ import pytest
 from llm_security.datasets import load_router_samples_jsonl, write_cases_jsonl
 from llm_security.experiments import (
     Phase2EConfig,
+    prepare_phase2e_frozen_jsonl,
     prepare_phase2e_jsonl,
     run_phase2e,
     run_phase2e_jsonl,
@@ -114,6 +115,46 @@ def test_phase2e_prepare_stops_before_training(tmp_path):
     assert (tmp_path / "data" / "legacy" / "router_train.jsonl").exists()
     assert (tmp_path / "data" / "semantic" / "router_dev.jsonl").exists()
     assert not (tmp_path / "artifacts").exists()
+
+
+def test_phase2e_prepare_preserves_existing_frozen_splits(tmp_path):
+    frozen = tmp_path / "frozen"
+    split_projects = {}
+    for index, split in enumerate(("train", "dev", "test")):
+        case = _workflow_case(index)
+        case.split = split
+        split_projects[split] = [case.project_id]
+        write_cases_jsonl([case], frozen / f"cases_{split}.jsonl")
+    (frozen / "split_manifest.json").write_text(
+        json.dumps(
+            {
+                "seed": 2026,
+                "splits": {
+                    split: {
+                        "case_count": 1,
+                        "project_count": 1,
+                        "projects": projects,
+                        "family_distribution": {
+                            "memory_bounds": 1,
+                            "lifetime_resource": 1,
+                        },
+                    }
+                    for split, projects in split_projects.items()
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = prepare_phase2e_frozen_jsonl(
+        frozen,
+        config=Phase2EConfig(data_directory=tmp_path / "prepared"),
+    )
+
+    assert summary["split_manifest"]["splits"]["test"]["projects"] == [
+        "workflow-project-2"
+    ]
+    assert (tmp_path / "prepared" / "semantic" / "router_train.jsonl").exists()
 
 
 class _InterruptingAnalyzer:

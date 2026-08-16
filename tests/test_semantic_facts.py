@@ -168,6 +168,17 @@ def test_concurrency_api_level_facts() -> None:
     assert SemanticFactKind.LOCK_RELEASE in _kinds(analysis)
 
 
+def test_juliet_thread_wrappers_produce_concurrency_facts() -> None:
+    analysis = _analyze(
+        "void f(void *lock) { stdThreadCreate(worker, 0, 0); "
+        "stdThreadLockAcquire(lock); stdThreadLockRelease(lock); }"
+    )
+
+    assert SemanticFactKind.THREAD_SPAWN in _kinds(analysis)
+    assert SemanticFactKind.LOCK_ACQUIRE in _kinds(analysis)
+    assert SemanticFactKind.LOCK_RELEASE in _kinds(analysis)
+
+
 def test_cfg_warning_suppresses_absence_based_facts() -> None:
     analysis = _analyze(
         "void f(int x, char *d, char *s, int n) { "

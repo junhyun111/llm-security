@@ -26,7 +26,13 @@ from .router_eval import (
     evaluate_supported_router,
     feature_importance,
 )
-from .split import FrozenProjectSplit, freeze_project_split, freeze_project_split_jsonl
+from .split import (
+    FrozenProjectFiles,
+    FrozenProjectSplit,
+    freeze_project_split,
+    freeze_project_split_jsonl,
+    load_frozen_project_files,
+)
 from .streaming import analyze_split_jsonl
 
 
@@ -92,6 +98,37 @@ def prepare_phase2e_jsonl(
         stage_total=2,
         backends=backends,
     )
+    return _finish_preparation(prepared, selected=selected, progress=progress)
+
+
+def prepare_phase2e_frozen_jsonl(
+    split_directory: str | Path,
+    *,
+    config: Phase2EConfig | None = None,
+    progress: Callable[[str], None] | None = None,
+    backends: tuple[str, ...] = ("semantic",),
+) -> dict[str, object]:
+    """Prepare Router features while preserving an existing frozen split."""
+    selected = config or Phase2EConfig()
+    _progress(progress, "[1/2] Loading source-frozen train/dev/test splits")
+    frozen_files = load_frozen_project_files(split_directory, seed=selected.seed)
+    prepared = _prepare_frozen_phase2e_jsonl(
+        frozen_files,
+        config=selected,
+        progress=progress,
+        retain_for_evaluation=False,
+        stage_total=2,
+        backends=backends,
+    )
+    return _finish_preparation(prepared, selected=selected, progress=progress)
+
+
+def _finish_preparation(
+    prepared: _PreparedPhase2E,
+    *,
+    selected: Phase2EConfig,
+    progress: Callable[[str], None] | None,
+) -> dict[str, object]:
     summary = {
         "seed": selected.seed,
         "streaming": True,
@@ -146,6 +183,27 @@ def _prepare_phase2e_jsonl(
         seed=selected.seed,
         progress=progress,
     )
+    return _prepare_frozen_phase2e_jsonl(
+        frozen_files,
+        config=selected,
+        progress=progress,
+        retain_for_evaluation=retain_for_evaluation,
+        stage_total=stage_total,
+        backends=backends,
+    )
+
+
+def _prepare_frozen_phase2e_jsonl(
+    frozen_files: FrozenProjectFiles,
+    *,
+    config: Phase2EConfig,
+    progress: Callable[[str], None] | None,
+    retain_for_evaluation: bool,
+    stage_total: int,
+    backends: tuple[str, ...],
+) -> _PreparedPhase2E:
+    selected = config
+    data_directory = Path(selected.data_directory)
     split_items = frozen_files.manifest["splits"]  # type: ignore[index]
     available_analyzers = {
         "legacy": LightweightStaticAnalyzer(max_candidates=None),

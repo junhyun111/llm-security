@@ -4,20 +4,29 @@ from pathlib import Path
 
 from llm_security.benchmarks import (
     merge_case_split_directories,
+    merge_router_split_directories,
     prepare_juliet_dataset,
 )
-from llm_security.datasets import load_cases_jsonl, write_cases_jsonl
-from llm_security.models import ExpertFamily, GroundTruth, ProjectCase
+from llm_security.datasets import (
+    RouterSample,
+    load_cases_jsonl,
+    load_router_samples_jsonl,
+    write_cases_jsonl,
+    write_router_samples_jsonl,
+)
+from llm_security.models import Candidate, ExpertFamily, GroundTruth, ProjectCase
 
 
-def _write_juliet_case(root: Path, cwe: int, name: str, expression: str) -> None:
-    path = root / f"CWE{cwe}_{name}__demo_01.c"
+def _write_juliet_case(
+    root: Path, cwe: int, name: str, expression: str, flow: str = "01"
+) -> None:
+    path = root / f"CWE{cwe}_{name}__demo_{flow}.c"
     path.write_text(
         (
-            f"void CWE{cwe}_{name}__demo_01_bad(void) {{\n"
+            f"void CWE{cwe}_{name}__demo_{flow}_bad(void) {{\n"
             f"  /* FLAW: benchmark vulnerability */ {expression};\n"
             "}\n"
-            f"void CWE{cwe}_{name}__demo_01_good(void) {{ return; }}\n"
+            f"void CWE{cwe}_{name}__demo_{flow}_good(void) {{ return; }}\n"
         ),
         encoding="utf-8",
     )
@@ -44,9 +53,32 @@ def test_juliet_converter_builds_e3_e4_e6_template_disjoint_splits(
         _write_juliet_case(
             source, 362, f"Race_Condition_{suffix}", "shared++"
         )
+        _write_juliet_case(
+            source,
+            190,
+            f"Integer_Overflow_{suffix}",
+            "int x = 2147483647 + 1",
+            flow="81_bad",
+        )
+        _write_juliet_case(
+            source,
+            78,
+            f"OS_Command_Injection_{suffix}",
+            'system("echo bad")',
+            flow="81_bad",
+        )
+        _write_juliet_case(
+            source,
+            362,
+            f"Race_Condition_{suffix}",
+            "shared++",
+            flow="81_bad",
+        )
     output = tmp_path / "converted"
 
-    manifest = prepare_juliet_dataset(source, output, seed=2026)
+    manifest = prepare_juliet_dataset(
+        source, output, seed=2026, max_cases_per_template=1
+    )
     cases = load_cases_jsonl(output / "cases_all.jsonl")
 
     assert manifest["case_count"] == 9
@@ -113,3 +145,50 @@ def test_merge_case_splits_preserves_source_frozen_assignments(tmp_path: Path) -
 
     assert manifest["case_count"] == 6
     assert len(load_cases_jsonl(tmp_path / "merged" / "cases_all.jsonl")) == 6
+    assert all(
+        manifest["splits"][split]["projects"]
+        for split in ("train", "dev", "test")
+    )
+
+
+def _router_sample(candidate_id: str, project_id: str) -> RouterSample:
+    return RouterSample(
+        Candidate(
+            candidate_id,
+            project_id,
+            "x.c",
+            "f",
+            1,
+            1,
+            "",
+            [],
+            {"cwe_memory_score": 1.0},
+            feature_schema_version="semantic-cwe-v2",
+        ),
+        [ExpertFamily.MEMORY_BOUNDS],
+    )
+
+
+def test_merge_router_splits_reuses_compact_frozen_features(tmp_path: Path) -> None:
+    inputs = []
+    for source_index in range(2):
+        source = tmp_path / f"router-source-{source_index}"
+        inputs.append(source)
+        for split in ("train", "dev", "test"):
+            write_router_samples_jsonl(
+                [
+                    _router_sample(
+                        f"candidate-{source_index}-{split}",
+                        f"router-project-{source_index}-{split}",
+                    )
+                ],
+                source / f"router_{split}.jsonl",
+            )
+
+    manifest = merge_router_split_directories(inputs, tmp_path / "router-merged")
+
+    assert manifest["feature_schema"] == "semantic-cwe-v2"
+    assert manifest["sample_count"] == 6
+    assert len(
+        load_router_samples_jsonl(tmp_path / "router-merged" / "router_train.jsonl")
+    ) == 2

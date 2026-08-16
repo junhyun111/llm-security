@@ -27,6 +27,57 @@ class FrozenProjectFiles:
     manifest: dict[str, object]
 
 
+def load_frozen_project_files(
+    input_directory: str | Path,
+    *,
+    seed: int = 2026,
+) -> FrozenProjectFiles:
+    """Load already assigned train/dev/test files without reshuffling projects."""
+    source = Path(input_directory)
+    manifest_path = source / "split_manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"Missing frozen split manifest: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        split_items = manifest["splits"]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError(f"Invalid frozen split manifest: {manifest_path}") from error
+    files = {
+        split: source / f"cases_{split}.jsonl"
+        for split in ("train", "dev", "test")
+    }
+    for split, path in files.items():
+        if not path.is_file():
+            raise ValueError(f"Missing frozen {split} split: {path}")
+        try:
+            item = split_items[split]
+            count = int(item["case_count"])
+            projects = {str(value) for value in item["projects"]}
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"Frozen split manifest lacks {split} counts/projects"
+            ) from error
+        if count < 1 or not projects:
+            raise ValueError(f"Frozen split {split} must contain cases and projects")
+    project_sets = {
+        split: {str(value) for value in split_items[split]["projects"]}
+        for split in files
+    }
+    for index, left in enumerate(("train", "dev", "test")):
+        for right in ("train", "dev", "test")[index + 1 :]:
+            overlap = project_sets[left] & project_sets[right]
+            if overlap:
+                raise ValueError(
+                    f"Project leakage between frozen {left}/{right}: "
+                    + ", ".join(sorted(overlap)[:10])
+                )
+    return FrozenProjectFiles(
+        seed=int(manifest.get("seed", seed)),
+        files=files,
+        manifest=manifest,
+    )
+
+
 def freeze_project_split(
     cases: list[ProjectCase], output_directory: str | Path, *, seed: int = 2026
 ) -> FrozenProjectSplit:

@@ -25,7 +25,7 @@ _register(
     247, 426, 427, 601,
 )
 _register("control_state", 252, 253, 273, 394, 457, 478, 670, 703, 754, 755)
-_register("concurrency", 362, 366, 367, 667, 764, 765, 821, 833)
+_register("concurrency", 362, 366, 367, 667, 764, 765, 821, 832, 833)
 
 
 def normalize_cwe(value: str) -> str:
