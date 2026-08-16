@@ -19,7 +19,7 @@ from llm_security.models import (
     ProjectCase,
     ValidationVerdict,
 )
-from llm_security.prompts import expert_messages
+from llm_security.prompts import batched_expert_messages, expert_messages
 from llm_security.routing import AnchorRareRouter
 from llm_security.validation import EvidenceValidator
 
@@ -102,6 +102,14 @@ def test_router_jsonl_and_prompt_preserve_fallible_cwe_hypotheses(
     assert restored.cwe_hypotheses[0].cwe == "CWE-416"
     assert "CWE-416" in messages[-1]["content"]
     assert "verify; do not copy blindly" in messages[-1]["content"]
+    assert "natural Korean" in messages[0]["content"]
+    assert "Do not translate JSON property names" in messages[0]["content"]
+
+    batched = batched_expert_messages(
+        [{"expert_tasks": [{"expert": ExpertFamily.MEMORY_SAFETY.value}]}]
+    )
+    assert "natural Korean" in batched[0]["content"]
+    assert "Do not translate JSON property names" in batched[0]["content"]
 
 
 def test_validator_requires_cwe_semantics_to_match_cited_evidence() -> None:

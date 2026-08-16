@@ -124,16 +124,16 @@ class EvidenceValidator:
             hard_checks.extend(("cwe_present", "cwe_semantics_supported"))
         if not all(bool(checks[name]) for name in hard_checks):
             verdict = ValidationVerdict.REJECTED
-            reasons.append("Location or cited evidence cannot be confirmed.")
+            reasons.append("위치 또는 인용된 정적 근거를 확인할 수 없습니다.")
         elif checks["contradicting_guard"]:
             verdict = ValidationVerdict.REJECTED
-            reasons.append("A static guard contradicts the reported missing protection.")
+            reasons.append("정적 guard가 보고된 보호 로직 누락 주장과 모순됩니다.")
         elif not checks["confidence_sufficient"]:
             verdict = ValidationVerdict.UNCERTAIN
-            reasons.append("Finding confidence is below the validation threshold.")
+            reasons.append("취약점 신뢰도가 검증 임계값보다 낮습니다.")
         else:
             verdict = ValidationVerdict.VALIDATED
-            reasons.append("Location and cited evidence are consistent with the candidate.")
+            reasons.append("위치와 인용된 정적 근거가 분석 후보와 일치합니다.")
         return ValidationResult(
             finding_id=finding.finding_id,
             verdict=verdict,

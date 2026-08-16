@@ -120,7 +120,7 @@ class BatchedExpertRunner:
     which guarantees at most one successful detection completion per run.
     """
 
-    prompt_version = "batched-expert-v3-cwe-hypothesis"
+    prompt_version = "batched-expert-v4-ko-cwe-hypothesis"
 
     def __init__(
         self,
