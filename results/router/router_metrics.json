@@ -1,15 +1,15 @@
 {
-  "artifact": "C:\\Users\\junhyun111\\Desktop\\llm-security\\artifacts\\phase2e\\router_anchor_rare_v1.pkl",
+  "artifact": "C:\\Users\\junhyun111\\Desktop\\llm-security\\artifacts\\phase2e\\router_anchor_rare_v2.pkl",
   "fixed_top2_exact_coverage": 0.8838821490467937,
   "anchor_rare": {
     "sample_count": 577,
-    "expert_coverage": 0.9965337954939342,
-    "exact_coverage": 0.9965337954939342,
-    "rare_recall": 0.9701492537313433,
-    "rare_precision": 0.1267056530214425,
-    "rare_trigger_rate": 0.8890814558058926,
-    "average_experts_per_candidate": 2.8890814558058926,
-    "llm_calls_saved_vs_all_six": 1795
+    "expert_coverage": 0.9948006932409013,
+    "exact_coverage": 0.9948006932409013,
+    "rare_recall": 0.9552238805970149,
+    "rare_precision": 0.12427184466019417,
+    "rare_trigger_rate": 0.8925476603119584,
+    "average_experts_per_candidate": 2.8925476603119584,
+    "llm_calls_saved_vs_all_six": 1793
   },
   "utility": {
     "evaluated": false,
