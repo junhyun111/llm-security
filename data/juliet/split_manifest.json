@@ -1,12 +1,12 @@
 {
   "seed": 2026,
   "split_policy": "family-stratified template-project-disjoint 70/15/15",
-  "case_count": 250,
+  "case_count": 260,
   "streaming": true,
   "splits": {
     "train": {
-      "case_count": 150,
-      "project_count": 15,
+      "case_count": 160,
+      "project_count": 16,
       "projects": [
         "juliet-cwe-114-cwe114_process_control__w32_char_connect_socket",
         "juliet-cwe-134-cwe134_uncontrolled_format_string__char_connect_socket_fprintf",
@@ -22,10 +22,11 @@
         "juliet-cwe-426-cwe426_untrusted_search_path__char_popen",
         "juliet-cwe-667-cwe667_improper_locking__basic",
         "juliet-cwe-681-cwe681_incorrect_conversion_between_numeric_types__double2float",
-        "juliet-cwe-78-cwe78_os_command_injection__char_connect_socket_execl"
+        "juliet-cwe-78-cwe78_os_command_injection__char_connect_socket_execl",
+        "juliet-cwe-832-cwe832_unlock_of_resource_that_is_not_locked__basic"
       ],
       "family_distribution": {
-        "concurrency_toctou": 32,
+        "concurrency_toctou": 42,
         "integer_size_type": 100,
         "taint_api_contract": 120
       }
@@ -70,12 +71,12 @@
     "taint_api_contract"
   ],
   "family_ground_truth_distribution": {
-    "concurrency_toctou": 52,
+    "concurrency_toctou": 62,
     "integer_size_type": 160,
     "taint_api_contract": 190
   },
   "family_case_distribution": {
-    "concurrency_toctou": 50,
+    "concurrency_toctou": 60,
     "integer_size_type": 100,
     "taint_api_contract": 100
   },
@@ -100,6 +101,7 @@
     "CWE-667": 10,
     "CWE-681": 30,
     "CWE-78": 10,
+    "CWE-832": 10,
     "CWE-90": 10
   },
   "sampling_limits": {
@@ -110,6 +112,6 @@
   },
   "duplicate_functions_removed": 18,
   "files_skipped_on_parse": 0,
-  "files_skipped_for_unsupported_cwe": 59761,
-  "files_skipped_by_sampling_quota": 41212
+  "files_skipped_for_unsupported_cwe": 59741,
+  "files_skipped_by_sampling_quota": 41220
 }

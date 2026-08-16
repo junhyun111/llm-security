@@ -5,11 +5,11 @@
     "C:\\Users\\junhyun111\\Desktop\\llm-security\\data\\phase2e_juliet\\semantic"
   ],
   "feature_schema": "semantic-cwe-v2",
-  "sample_count": 3744,
+  "sample_count": 3784,
   "splits": {
     "train": {
-      "sample_count": 2664,
-      "project_count": 167,
+      "sample_count": 2704,
+      "project_count": 170,
       "projects": [
         "FreeRDP",
         "Little-CMS",
@@ -75,11 +75,14 @@
         "juliet-cwe-194-cwe194_unexpected_sign_extension__connect_socket_malloc",
         "juliet-cwe-195-cwe195_signed_to_unsigned_conversion_error__connect_socket_malloc",
         "juliet-cwe-23-cwe23_relative_path_traversal__char_connect_socket_fopen",
+        "juliet-cwe-366-cwe366_race_condition_within_thread__global_int",
         "juliet-cwe-366-cwe366_race_condition_within_thread__int_byref",
         "juliet-cwe-369-cwe369_divide_by_zero__float_connect_socket",
         "juliet-cwe-426-cwe426_untrusted_search_path__char_popen",
+        "juliet-cwe-667-cwe667_improper_locking__basic",
         "juliet-cwe-681-cwe681_incorrect_conversion_between_numeric_types__double2float",
         "juliet-cwe-78-cwe78_os_command_injection__char_connect_socket_execl",
+        "juliet-cwe-832-cwe832_unlock_of_resource_that_is_not_locked__basic",
         "kamailio",
         "krb5",
         "lcms",
@@ -180,7 +183,7 @@
         "zstd"
       ],
       "label_distribution": {
-        "concurrency_toctou": 1,
+        "concurrency_toctou": 41,
         "control_state_error": 884,
         "integer_size_type": 40,
         "lifetime_resource": 233,

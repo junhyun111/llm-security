@@ -3,42 +3,42 @@
     "semantic": {
       "dev": {
         "analysis_error_count": 0,
-        "analysis_latency_ms_per_case": 9.444198010023683,
-        "average_candidates_per_case": 1.56,
-        "average_candidates_per_ground_truth": 0.8666666666666667,
-        "candidate_count": 78,
+        "analysis_latency_ms_per_case": 10.161550010088831,
+        "average_candidates_per_case": 2.94,
+        "average_candidates_per_ground_truth": 1.6333333333333333,
+        "candidate_count": 147,
         "candidate_hit_count": 70,
         "candidate_recall": 0.7777777777777778,
         "case_count": 50,
         "ground_truth_count": 90,
-        "mean_candidate_loc": 64.96153846153847,
-        "median_candidate_loc": 63.5
+        "mean_candidate_loc": 43.42857142857143,
+        "median_candidate_loc": 34.0
       },
       "test": {
         "analysis_error_count": 0,
-        "analysis_latency_ms_per_case": 8.967812007758766,
-        "average_candidates_per_case": 2.52,
-        "average_candidates_per_ground_truth": 2.1,
-        "candidate_count": 126,
+        "analysis_latency_ms_per_case": 9.314069994725287,
+        "average_candidates_per_case": 3.52,
+        "average_candidates_per_ground_truth": 2.933333333333333,
+        "candidate_count": 176,
         "candidate_hit_count": 60,
         "candidate_recall": 1.0,
         "case_count": 50,
         "ground_truth_count": 60,
-        "mean_candidate_loc": 47.57142857142857,
-        "median_candidate_loc": 38.0
+        "mean_candidate_loc": 38.60227272727273,
+        "median_candidate_loc": 33.0
       },
       "train": {
         "analysis_error_count": 0,
-        "analysis_latency_ms_per_case": 8.773362002490709,
-        "average_candidates_per_case": 1.94,
-        "average_candidates_per_ground_truth": 1.1547619047619047,
-        "candidate_count": 291,
-        "candidate_hit_count": 191,
-        "candidate_recall": 0.7579365079365079,
-        "case_count": 150,
-        "ground_truth_count": 252,
-        "mean_candidate_loc": 47.22680412371134,
-        "median_candidate_loc": 30.0
+        "analysis_latency_ms_per_case": 9.533837498747744,
+        "average_candidates_per_case": 3.725,
+        "average_candidates_per_ground_truth": 2.2748091603053435,
+        "candidate_count": 596,
+        "candidate_hit_count": 231,
+        "candidate_recall": 0.8816793893129771,
+        "case_count": 160,
+        "ground_truth_count": 262,
+        "mean_candidate_loc": 33.625838926174495,
+        "median_candidate_loc": 22.0
       }
     }
   },
@@ -51,12 +51,12 @@
     "semantic": {
       "dev": 40,
       "test": 50,
-      "train": 101
+      "train": 141
     }
   },
   "seed": 2026,
   "split_manifest": {
-    "case_count": 250,
+    "case_count": 260,
     "cwe_case_distribution": {
       "CWE-114": 10,
       "CWE-134": 10,
@@ -78,21 +78,22 @@
       "CWE-667": 10,
       "CWE-681": 30,
       "CWE-78": 10,
+      "CWE-832": 10,
       "CWE-90": 10
     },
     "duplicate_functions_removed": 18,
     "family_case_distribution": {
-      "concurrency_toctou": 50,
+      "concurrency_toctou": 60,
       "integer_size_type": 100,
       "taint_api_contract": 100
     },
     "family_ground_truth_distribution": {
-      "concurrency_toctou": 52,
+      "concurrency_toctou": 62,
       "integer_size_type": 160,
       "taint_api_contract": 190
     },
-    "files_skipped_by_sampling_quota": 41212,
-    "files_skipped_for_unsupported_cwe": 59761,
+    "files_skipped_by_sampling_quota": 41220,
+    "files_skipped_for_unsupported_cwe": 59741,
     "files_skipped_on_parse": 0,
     "sampling_limits": {
       "max_cases": 0,
@@ -142,13 +143,13 @@
         ]
       },
       "train": {
-        "case_count": 150,
+        "case_count": 160,
         "family_distribution": {
-          "concurrency_toctou": 32,
+          "concurrency_toctou": 42,
           "integer_size_type": 100,
           "taint_api_contract": 120
         },
-        "project_count": 15,
+        "project_count": 16,
         "projects": [
           "juliet-cwe-114-cwe114_process_control__w32_char_connect_socket",
           "juliet-cwe-134-cwe134_uncontrolled_format_string__char_connect_socket_fprintf",
@@ -164,7 +165,8 @@
           "juliet-cwe-426-cwe426_untrusted_search_path__char_popen",
           "juliet-cwe-667-cwe667_improper_locking__basic",
           "juliet-cwe-681-cwe681_incorrect_conversion_between_numeric_types__double2float",
-          "juliet-cwe-78-cwe78_os_command_injection__char_connect_socket_execl"
+          "juliet-cwe-78-cwe78_os_command_injection__char_connect_socket_execl",
+          "juliet-cwe-832-cwe832_unlock_of_resource_that_is_not_locked__basic"
         ]
       }
     },

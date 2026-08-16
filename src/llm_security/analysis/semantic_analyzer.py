@@ -75,6 +75,9 @@ class SemanticAnalyzer:
             if node_id is None:
                 continue
             name = self.catalog.canonical_name(call.callee)
+            facts.extend(
+                self._numeric_conversion_facts(analysis, call, node_id, name)
+            )
             if name in self.catalog.allocations:
                 spec = self.catalog.allocations[name]
                 allocation_calls.append((call, node_id, spec))
@@ -263,6 +266,43 @@ class SemanticAnalyzer:
             facts=sort_facts(facts),
             taint_paths=taint_paths,
         )
+
+    def _numeric_conversion_facts(
+        self,
+        analysis: FunctionAnalysis,
+        call: CallSite,
+        node_id: str,
+        name: str,
+    ) -> list[SemanticFact]:
+        facts: list[SemanticFact] = []
+        for argument_index, info in enumerate(call.argument_info):
+            numeric_types = sorted(
+                cast_type
+                for cast_type in info.cast_types
+                if _is_numeric_cast_type(cast_type)
+            )
+            if not numeric_types:
+                continue
+            facts.append(
+                self._fact(
+                    analysis,
+                    SemanticFactKind.NUMERIC_CONVERSION,
+                    subject=",".join(sorted(info.symbols)) or None,
+                    object=name,
+                    source_node_id=node_id,
+                    sink_node_id=node_id,
+                    path=[node_id],
+                    symbols=info.symbols,
+                    confidence=0.85 if not analysis.cfg.warnings else 0.6,
+                    attributes={
+                        "callee": name,
+                        "argument_index": argument_index,
+                        "cast_types": numeric_types,
+                        "expression": info.text,
+                    },
+                )
+            )
+        return facts
 
     def _memory_copy_facts(
         self,
@@ -783,3 +823,25 @@ def _call_result_symbols(
         for definition in analysis.dataflow.definitions.values()
         if definition.node_id == node_id and definition.kind == "call_result"
     }
+
+
+def _is_numeric_cast_type(cast_type: str) -> bool:
+    normalized = " ".join(cast_type.lower().replace("*", " * ").split())
+    if "*" in normalized:
+        return False
+    tokens = set(normalized.split())
+    return bool(
+        tokens
+        & {
+            "char",
+            "short",
+            "int",
+            "long",
+            "float",
+            "double",
+            "signed",
+            "unsigned",
+            "size_t",
+            "ssize_t",
+        }
+    )

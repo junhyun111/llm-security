@@ -17,6 +17,7 @@ class SemanticFactKind(str, Enum):
     ARITHMETIC_TO_ALLOCATION = "arithmetic_to_allocation"
     ARITHMETIC_TO_MEMORY_SINK = "arithmetic_to_memory_sink"
     CAST_TO_SIZE_SINK = "cast_to_size_sink"
+    NUMERIC_CONVERSION = "numeric_conversion"
     TAINT_SOURCE = "taint_source"
     TAINT_SINK = "taint_sink"
     SOURCE_TO_SINK = "source_to_sink"

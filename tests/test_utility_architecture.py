@@ -80,10 +80,32 @@ def test_anchor_rare_router_preserves_multi_label_and_calibrates() -> None:
     metrics = router.evaluate(samples)
 
     assert calibration.achieved_recall == 1.0
+    assert set(calibration.family_thresholds) == {"lifetime_resource"}
     assert ExpertFamily.MEMORY_BOUNDS in decision.selected
     assert ExpertFamily.CONTROL_STATE_ERROR in decision.selected
     assert ExpertFamily.LIFETIME_RESOURCE in decision.selected
     assert metrics.rare_recall == 1.0
+    assert metrics.rare_family_metrics["lifetime_resource"]["recall"] == 1.0
+
+
+def test_anchor_rare_router_cannot_suppress_strong_static_cwe_evidence() -> None:
+    samples = [
+        RouterSample(_candidate("common-1"), [ExpertFamily.MEMORY_BOUNDS]),
+        RouterSample(_candidate("common-2"), [ExpertFamily.CONTROL_STATE_ERROR]),
+        RouterSample(
+            _candidate("rare", rare=1.0),
+            [ExpertFamily.INTEGER_SIZE_TYPE],
+        ),
+    ]
+    router = AnchorRareRouter.fit(samples, threshold=0.8)
+    candidate = _candidate("static-cwe")
+    candidate.features["cwe_integer_score"] = 0.95
+
+    decision = router.route(candidate)
+
+    assert ExpertFamily.INTEGER_SIZE_TYPE in decision.selected
+    assert decision.scores[ExpertFamily.INTEGER_SIZE_TYPE] >= 0.95
+    assert any("static CWE evidence raised" in reason for reason in decision.reasons)
 
 
 def test_utility_router_learns_assignment_success_and_round_trips(tmp_path: Path) -> None:

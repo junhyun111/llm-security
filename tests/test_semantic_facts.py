@@ -87,6 +87,32 @@ def test_arithmetic_and_cast_flow_to_size_sinks() -> None:
     assert SemanticFactKind.CAST_TO_SIZE_SINK in _kinds(cast_sink)
 
 
+def test_explicit_numeric_conversion_is_detected_outside_size_sink() -> None:
+    analysis = _analyze(
+        "void f(double value) { printIntLine((int)value); }"
+    )
+
+    fact = next(
+        fact
+        for fact in analysis.facts
+        if fact.kind == SemanticFactKind.NUMERIC_CONVERSION
+    )
+    assert fact.symbols == ["value"]
+    assert fact.attributes["cast_types"] == ["int"]
+
+
+def test_resolved_hostname_reaching_identity_comparison_is_tainted() -> None:
+    analysis = _analyze(
+        "void f(char *address) { struct hostent *host; "
+        "host = gethostbyaddr(address, 4, 2); "
+        "if (strcmp(host->h_name, \"trusted\") == 0) grant(); }"
+    )
+
+    assert SemanticFactKind.TAINT_SOURCE in _kinds(analysis)
+    assert SemanticFactKind.TAINT_SINK in _kinds(analysis)
+    assert SemanticFactKind.SOURCE_TO_SINK in _kinds(analysis)
+
+
 def test_use_after_release_requires_no_intervening_redefinition() -> None:
     vulnerable = _analyze("void f(char *p) { free(p); p->field = 1; }")
     redefined = _analyze(
@@ -155,6 +181,28 @@ def test_toctou_check_and_use_share_reaching_path_symbol() -> None:
     assert fact.symbols == ["path"]
     assert fact.attributes["check_api"] == "access"
     assert fact.attributes["use_api"] == "open"
+
+
+def test_juliet_portability_macros_produce_toctou_fact() -> None:
+    analysis = _analyze(
+        "void f(char *filename) { struct stat b; "
+        "if (STAT(filename, &b) != -1) OPEN(filename, 2); }"
+    )
+
+    fact = next(
+        fact
+        for fact in analysis.facts
+        if fact.kind == SemanticFactKind.TOCTOU_CHECK_USE
+    )
+    assert fact.symbols == ["filename"]
+    assert fact.attributes["check_api"] == "stat"
+    assert fact.attributes["use_api"] == "open"
+
+    access_analysis = _analyze(
+        "void f(char *filename) { if (ACCESS(filename, 0) == 0) "
+        "OPEN(filename, 2); }"
+    )
+    assert SemanticFactKind.TOCTOU_CHECK_USE in _kinds(access_analysis)
 
 
 def test_concurrency_api_level_facts() -> None:

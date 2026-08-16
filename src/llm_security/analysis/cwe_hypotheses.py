@@ -42,6 +42,11 @@ _DIRECT_RULES: dict[str, tuple[str, float, str]] = {
         0.95,
         "numeric conversion reaches a size-sensitive operation",
     ),
+    "numeric_conversion": (
+        "CWE-681",
+        0.90,
+        "an explicit numeric conversion can narrow or alter the represented value",
+    ),
     "uninitialized_use": (
         "CWE-457",
         1.00,

@@ -3,6 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+_PORTABILITY_API_ALIASES = {
+    # Juliet's std_testcase.h maps these portability macros to the platform API.
+    # Keeping the mapping here lets the semantic analyzer reason about the source
+    # before preprocessing it.
+    "ACCESS": "access",
+    "FOPEN": "fopen",
+    "OPEN": "open",
+    "STAT": "stat",
+}
+
+
 @dataclass(slots=True, frozen=True)
 class MemoryCopySpec:
     dst_arg: int
@@ -72,6 +83,8 @@ class ApiCatalog:
                 "recv": SourceSpec((1,)),
                 "fread": SourceSpec((0,)),
                 "getenv": SourceSpec((), True),
+                "gethostbyaddr": SourceSpec((), True),
+                "gethostbyname": SourceSpec((), True),
             },
             taint_sinks={
                 "system": SinkSpec((0,)),
@@ -80,6 +93,8 @@ class ApiCatalog:
                 "fopen": SinkSpec((0,)),
                 "printf": SinkSpec((0,)),
                 "fprintf": SinkSpec((1,)),
+                "strcmp": SinkSpec((0, 1)),
+                "strncmp": SinkSpec((0, 1)),
             },
             thread_spawn={"pthread_create", "stdThreadCreate"},
             lock_acquire={"pthread_mutex_lock", "stdThreadLockAcquire"},
@@ -100,4 +115,4 @@ class ApiCatalog:
             value = value.rsplit(".", 1)[-1]
         if "::" in value:
             value = value.rsplit("::", 1)[-1]
-        return value
+        return _PORTABILITY_API_ALIASES.get(value, value)
