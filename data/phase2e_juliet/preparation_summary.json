@@ -3,7 +3,7 @@
     "semantic": {
       "dev": {
         "analysis_error_count": 0,
-        "analysis_latency_ms_per_case": 8.97453999845311,
+        "analysis_latency_ms_per_case": 9.444198010023683,
         "average_candidates_per_case": 1.56,
         "average_candidates_per_ground_truth": 0.8666666666666667,
         "candidate_count": 78,
@@ -16,7 +16,7 @@
       },
       "test": {
         "analysis_error_count": 0,
-        "analysis_latency_ms_per_case": 9.324300000444055,
+        "analysis_latency_ms_per_case": 8.967812007758766,
         "average_candidates_per_case": 2.52,
         "average_candidates_per_ground_truth": 2.1,
         "candidate_count": 126,
@@ -29,7 +29,7 @@
       },
       "train": {
         "analysis_error_count": 0,
-        "analysis_latency_ms_per_case": 9.001741332467645,
+        "analysis_latency_ms_per_case": 8.773362002490709,
         "average_candidates_per_case": 1.94,
         "average_candidates_per_ground_truth": 1.1547619047619047,
         "candidate_count": 291,

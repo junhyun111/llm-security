@@ -1,0 +1,8 @@
+{
+  "conversion_fingerprint": "5de6c7e9c62526df81dc6380dcbb29d44fa64a1ef209ba55ab044a4d6d7d41a2",
+  "source_directory": "C:\\Users\\junhyun111\\Downloads\\2017-10-01-juliet-test-suite-for-c-cplusplus-v1-3",
+  "seed": 2026,
+  "max_cases_per_family": 100,
+  "max_cases_per_cwe": 50,
+  "max_cases_per_template": 10
+}

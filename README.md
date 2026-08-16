@@ -18,10 +18,11 @@ C:\Users\junhyun111\Downloads\2017-10-01-juliet-test-suite-for-c-cplusplus-v1-3
 4. 기존 ARVO Router JSONL과 Juliet Router JSONL을 `data/phase2e_combined`에 병합
 5. 합친 표본으로 Anchor/Rare Router 학습 및 dev threshold 보정
 
-중단 후 노트북을 다시 실행하면 정적 분석 체크포인트에서 이어집니다. 처음부터 다시 만들
-때만 설정 셀의 `REBUILD_JULIET`, `REBUILD_JULIET_FEATURES` 중 필요한 값을 `True`로
-바꾸십시오. 기존 `data/phase2e/semantic` ARVO 분석 결과는 재사용하므로 ARVO 4,160개를
-다시 분석하지 않습니다. 학습 모델은
+중단 후 노트북을 다시 실행하면 정적 분석 체크포인트에서 이어집니다. Juliet 변환기·CWE
+매핑·정적 분석 코드가 바뀌면 저장된 코드 지문이 달라져 Juliet 데이터와 feature만 자동으로
+다시 만듭니다. 강제로 다시 만들 때만 설정 셀의 `REBUILD_JULIET` 또는
+`REBUILD_JULIET_FEATURES`를 `True`로 바꾸십시오. 기존 `data/phase2e/semantic` ARVO 분석
+결과는 재사용하므로 ARVO 4,160개를 다시 분석하지 않습니다. 학습 모델은
 `artifacts/phase2e/router_anchor_rare_v2.pkl`에 저장됩니다. 이 과정에는 OpenRouter API key가
 필요하지 않습니다. 실제 Expert 실행 결과가 `data/utility/outcomes_train.jsonl`과
 `outcomes_dev.jsonl`에 있을 때만 Utility Router도 추가로 학습합니다.

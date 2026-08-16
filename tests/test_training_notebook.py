@@ -20,6 +20,9 @@ def test_router_training_notebook_is_valid_and_offline():
     assert "prepare_juliet_dataset" in code
     assert "merge_router_split_directories" in code
     assert "prepare_phase2e_frozen_jsonl" in code
+    assert "CONVERSION_FINGERPRINT" in code
+    assert "ANALYSIS_FINGERPRINT" in code
+    assert "JULIET_FEATURE_CACHE" in code
     assert "artifacts' / 'phase2e" in code
     assert "router_anchor_rare_v2.pkl" in code
     assert "router_top2_full5_v4.pkl" in code
