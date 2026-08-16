@@ -4,8 +4,6 @@ __pycache__/
 .ipynb_checkpoints/
 .venv/
 .env
-artifacts/
-models/*.pkl
 experiment*.json
 router_*.jsonl
 data/arvo/*
