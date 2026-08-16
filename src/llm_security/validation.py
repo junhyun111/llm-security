@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .cwe import cwes_supported_by_evidence
 from .evidence import _separate_cpp_comments
 from .llm import LLMClient
 from .models import (
@@ -92,6 +93,9 @@ class EvidenceValidator:
 
     def validate(self, finding: Finding, candidate: Candidate) -> ValidationResult:
         evidence_ids = {item.evidence_id for item in candidate.evidence}
+        cited_evidence = [
+            item for item in candidate.evidence if item.evidence_id in finding.evidence_ids
+        ]
         checks: dict[str, bool | None] = {
             "file_matches": finding.file == candidate.file,
             "function_matches": finding.function == candidate.function,
@@ -101,6 +105,10 @@ class EvidenceValidator:
             ),
             "evidence_exists": bool(finding.evidence_ids),
             "evidence_ids_valid": set(finding.evidence_ids).issubset(evidence_ids),
+            "cwe_present": bool(finding.cwes),
+            "cwe_semantics_supported": cwes_supported_by_evidence(
+                finding.cwes, cited_evidence
+            ),
             "confidence_sufficient": finding.confidence >= self.minimum_confidence,
             "contradicting_guard": self._has_contradicting_guard(finding, candidate),
         }
@@ -112,6 +120,8 @@ class EvidenceValidator:
             "evidence_exists",
             "evidence_ids_valid",
         ]
+        if candidate.feature_schema_version == "semantic-cwe-v2":
+            hard_checks.extend(("cwe_present", "cwe_semantics_supported"))
         if not all(bool(checks[name]) for name in hard_checks):
             verdict = ValidationVerdict.REJECTED
             reasons.append("Location or cited evidence cannot be confirmed.")
@@ -157,7 +167,7 @@ class EvidenceValidator:
             # occur in the same candidate function.
             if cited_kinds & temporal_kinds and not cited_kinds & spatial_kinds:
                 return False
-            if candidate.feature_schema_version == "semantic-v1":
+            if candidate.feature_schema_version.startswith("semantic-"):
                 return any(
                     evidence.kind == "guard_protects_sink"
                     and evidence.facts.get("semantically_protective") is True

@@ -64,7 +64,7 @@ class RuleTriggerFallback:
             return {}, []
         learned = set(learned_families)
         features = candidate.features
-        if candidate.feature_schema_version == "semantic-v1":
+        if candidate.feature_schema_version.startswith("semantic-"):
             integer_trigger = any(
                 features.get(name, 0.0) > 0.0
                 for name in (

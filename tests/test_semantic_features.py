@@ -1,5 +1,5 @@
 from llm_security.analysis import (
-    FEATURE_SCHEMA_SEMANTIC_V1,
+    FEATURE_SCHEMA_SEMANTIC_CWE_V2,
     SemanticStaticAnalyzer,
 )
 from llm_security.models import ProjectCase
@@ -26,10 +26,10 @@ def test_uaf_and_arithmetic_facts_become_fixed_features() -> None:
 def test_semantic_feature_schema_is_complete_and_zero_filled() -> None:
     candidate = _candidate("void f(int n) { char *p = malloc(n); consume(p); }")
 
-    assert tuple(candidate.features) == FEATURE_SCHEMA_SEMANTIC_V1
+    assert tuple(candidate.features) == FEATURE_SCHEMA_SEMANTIC_CWE_V2
     assert candidate.features["double_release_count"] == 0.0
     assert candidate.features["source_to_sink_count"] == 0.0
-    assert candidate.feature_schema_version == "semantic-v1"
+    assert candidate.feature_schema_version == "semantic-cwe-v2"
 
 
 def test_same_source_produces_identical_features() -> None:

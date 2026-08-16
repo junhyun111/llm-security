@@ -43,7 +43,7 @@ def _candidate(candidate_id: str, *, rare: float = 0.0) -> Candidate:
         evidence=[Evidence("E1", "use_after_release", "x.c", 2, "p[0]", "f")],
         features={"use_after_release_count": rare, "memory_copy_count": 1.0 - rare},
         suspicion_score=0.9,
-        feature_schema_version="semantic-v1",
+        feature_schema_version="semantic-cwe-v2",
     )
 
 
@@ -408,6 +408,11 @@ def test_learned_gate_uses_all_truth_coverage_and_escalates() -> None:
 
 
 def _finding(finding_id: str, expert: ExpertFamily, model: str, line: int) -> Finding:
+    cwes = (
+        ["CWE-190"]
+        if expert == ExpertFamily.INTEGER_SIZE_TYPE
+        else ["CWE-416"]
+    )
     return Finding(
         finding_id=finding_id,
         candidate_id="candidate",
@@ -419,7 +424,7 @@ def _finding(finding_id: str, expert: ExpertFamily, model: str, line: int) -> Fi
         function="f",
         line_start=line,
         line_end=line,
-        cwes=[],
+        cwes=cwes,
         source="len",
         sink="memcpy",
         missing_guard="len <= cap",

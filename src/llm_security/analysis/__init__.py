@@ -30,6 +30,7 @@ from .frontend import AnalysisLimitError, TreeSitterFrontend
 from .evidence_normalizer import SemanticEvidenceNormalizer
 from .features import (
     FACT_FEATURE_MAP,
+    FEATURE_SCHEMA_SEMANTIC_CWE_V2,
     FEATURE_SCHEMA_SEMANTIC_V1,
     SemanticFeatureExtractor,
 )
@@ -84,6 +85,7 @@ __all__ = [
     "DominatorAnalysis",
     "ExpressionInfo",
     "FACT_FEATURE_MAP",
+    "FEATURE_SCHEMA_SEMANTIC_CWE_V2",
     "FEATURE_SCHEMA_SEMANTIC_V1",
     "FunctionIR",
     "FunctionAnalysis",

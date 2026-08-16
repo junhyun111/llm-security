@@ -60,7 +60,7 @@ class JobStatus(str, Enum):
 @dataclass(slots=True)
 class WebSettings:
     workspace_root: Path = Path(".web-data")
-    router_artifact: Path = Path("artifacts/phase2e/router_top2_full5_v2.pkl")
+    router_artifact: Path = Path("artifacts/phase2e/router_top2_full5_v4.pkl")
     max_upload_files: int = 10_000
     max_upload_bytes: int = 1024 * 1024 * 1024
     max_source_file_bytes: int = 5 * 1024 * 1024
@@ -79,8 +79,8 @@ class WebSettings:
         values.update(os.environ)
         artifact = values.get("WEB_ROUTER_ARTIFACT", "").strip()
         if not artifact:
-            utility = Path("artifacts/phase2e/router_top2_full5_v2.pkl")
-            anchor = Path("artifacts/phase2e/router_anchor_rare_v1.pkl")
+            utility = Path("artifacts/phase2e/router_top2_full5_v4.pkl")
+            anchor = Path("artifacts/phase2e/router_anchor_rare_v2.pkl")
             artifact = str(utility if utility.exists() else anchor)
         return cls(
             workspace_root=Path(values.get("WEB_WORKSPACE_ROOT", ".web-data")),
@@ -595,6 +595,9 @@ class WebJobService:
             "summary": {
                 "source_file_count": len(source_files),
                 "candidate_count": len(result.candidates),
+                "cwe_hypothesis_count": sum(
+                    len(item.cwe_hypotheses) for item in result.candidates
+                ),
                 "finding_count": len(result.findings),
                 "validated_finding_count": validated,
                 "total_cost": sum(item.cost for item in result.usage),

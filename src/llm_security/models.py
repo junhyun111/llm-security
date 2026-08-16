@@ -34,7 +34,7 @@ class ExpertAssignment:
 
     expert: ExpertFamily
     model_id: str
-    prompt_version: str = "expert-v3-five-expert"
+    prompt_version: str = "expert-v4-cwe-hypothesis"
     expected_cost: float = 0.0
 
     @property
@@ -61,6 +61,16 @@ class Evidence:
     facts: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class CweHypothesis:
+    """A static, evidence-backed CWE lead. It is not ground truth."""
+
+    cwe: str
+    confidence: float
+    evidence_ids: list[str]
+    reasons: list[str] = field(default_factory=list)
+
+
 @dataclass(slots=True, init=False)
 class Candidate:
     candidate_id: str
@@ -76,6 +86,7 @@ class Candidate:
     callers: list[str]
     callees: list[str]
     feature_schema_version: str
+    cwe_hypotheses: list[CweHypothesis]
 
     def __init__(
         self,
@@ -92,6 +103,7 @@ class Candidate:
         callers: list[str] | None = None,
         callees: list[str] | None = None,
         feature_schema_version: str = "legacy-v1",
+        cwe_hypotheses: list[CweHypothesis] | None = None,
         *,
         static_score: float | None = None,
     ) -> None:
@@ -113,6 +125,7 @@ class Candidate:
         self.callers = list(callers or [])
         self.callees = list(callees or [])
         self.feature_schema_version = feature_schema_version
+        self.cwe_hypotheses = list(cwe_hypotheses or [])
 
     @property
     def static_score(self) -> float:

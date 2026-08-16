@@ -37,6 +37,8 @@ class Phase2EConfig:
     target_routing_coverage: float = 0.95
     semantic_max_source_bytes: int | None = 2 * 1024 * 1024
     semantic_parse_timeout_ms: int | None = 30_000
+    analysis_checkpoint_every_cases: int = 100
+    resume_analysis: bool = True
     data_directory: str | Path = "data/phase2e"
     artifact_directory: str | Path = "artifacts/phase2e"
     output_directory: str | Path = "results/phase2e"
@@ -93,6 +95,11 @@ def prepare_phase2e_jsonl(
     summary = {
         "seed": selected.seed,
         "streaming": True,
+        "checkpointing": {
+            "every_cases": selected.analysis_checkpoint_every_cases,
+            "resume": selected.resume_analysis,
+            "directory": str(Path(selected.data_directory) / "analysis_checkpoints"),
+        },
         "training_performed": False,
         "split_manifest": prepared.frozen.manifest,
         "analyzer_metrics": {
@@ -200,6 +207,28 @@ def _prepare_phase2e_jsonl(
                     data_directory
                     / "analysis_failures"
                     / f"{backend}_{split_name}.jsonl"
+                ),
+                checkpoint_path=(
+                    data_directory
+                    / "analysis_checkpoints"
+                    / (
+                        f"{backend}_{split_name}_"
+                        f"{'evaluation' if retain else 'prepare'}.json"
+                    )
+                ),
+                checkpoint_every=selected.analysis_checkpoint_every_cases,
+                resume=selected.resume_analysis,
+                resume_progress=(
+                    lambda done, total, backend=backend, split_name=split_name: _progress(
+                        progress,
+                        f"      {backend}/{split_name}: resuming from {done}/{total} cases",
+                    )
+                ),
+                checkpoint_progress=(
+                    lambda done, total, backend=backend, split_name=split_name: _progress(
+                        progress,
+                        f"      {backend}/{split_name}: checkpoint saved at {done}/{total} cases",
+                    )
                 ),
             )
             analyzer_results[backend][split_name] = AnalyzerEvaluation(
@@ -325,7 +354,7 @@ def run_phase2e(
         target_coverage=selected.target_routing_coverage,
     )
     legacy_router.save(artifact_directory / "router_legacy_v1.pkl")
-    semantic_router.save(artifact_directory / "router_semantic_v1.pkl")
+    semantic_router.save(artifact_directory / "router_semantic_cwe_v2.pkl")
 
     _progress(progress, "[5/7] Evaluating learned and hybrid routing")
     legacy_test_samples = router_samples["legacy"]["test"]
@@ -569,7 +598,7 @@ def _experiment_manifest(
         "llm_api_calls": 0,
         "git_commit": _git_commit(),
         "seed": config.seed,
-        "feature_schemas": ["legacy-v1", "semantic-v1"],
+        "feature_schemas": ["legacy-v1", "semantic-cwe-v2"],
         "router": "multiclass_logistic_regression",
         "classifier_hyperparameters_shared": True,
         "gate_calibration_split": "dev",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .cwe import expert_for_cwe
 from .knowledge import KnowledgeRetriever, format_knowledge
 from .models import Candidate, ExpertFamily
 
@@ -12,6 +13,7 @@ class ExpertContext:
     expert: ExpertFamily
     code: str
     evidence_text: str
+    cwe_hypotheses_text: str
     comments_untrusted: str = ""
     knowledge_text: str = "No retrieved security knowledge."
 
@@ -39,6 +41,15 @@ class ContextBuilder:
             f"[{item.evidence_id}] {item.kind} {item.file}:{item.line}: {item.expression}"
             for item in selected
         ]
+        cwe_lines = [
+            (
+                f"[{hypothesis.cwe}] confidence={hypothesis.confidence:.3f} "
+                f"scope={'selected-expert' if expert_for_cwe(hypothesis.cwe) == expert else 'cross-family'} "
+                f"evidence={','.join(hypothesis.evidence_ids) or '(none)'}; "
+                f"reasons={'; '.join(hypothesis.reasons) or '(none)'}"
+            )
+            for hypothesis in candidate.cwe_hypotheses
+        ]
         raw_code = candidate.code[: self.max_characters]
         code, comments = _separate_cpp_comments(raw_code)
         knowledge = (
@@ -51,6 +62,9 @@ class ContextBuilder:
             expert=expert,
             code=code,
             evidence_text="\n".join(evidence_lines) or "No matching static evidence.",
+            cwe_hypotheses_text=(
+                "\n".join(cwe_lines) or "No static CWE hypothesis."
+            ),
             comments_untrusted=comments,
             knowledge_text=format_knowledge(
                 knowledge, max_characters=self.max_knowledge_characters

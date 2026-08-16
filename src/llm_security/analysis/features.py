@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 
+from ..cwe import cwe_number, expert_for_cwe
+from ..models import CweHypothesis, ExpertFamily
 from .semantic_analyzer import SemanticFunctionAnalysis
 from .semantic_facts import SemanticFactKind
 
@@ -44,6 +46,25 @@ FEATURE_SCHEMA_SEMANTIC_V1 = (
     "max_fact_confidence",
 )
 
+CWE_SCORE_NUMBERS = (
+    "20", "22", "78", "120", "125", "129", "134", "190", "252", "367",
+    "415", "416", "457", "476", "681", "787",
+)
+
+FEATURE_SCHEMA_SEMANTIC_CWE_V2 = (
+    *FEATURE_SCHEMA_SEMANTIC_V1,
+    "cwe_hypothesis_count",
+    "cwe_top1_confidence",
+    "cwe_top1_top2_margin",
+    "cwe_cross_family_count",
+    "cwe_memory_score",
+    "cwe_integer_score",
+    "cwe_taint_score",
+    "cwe_control_score",
+    "cwe_concurrency_score",
+    *(f"cwe_{number}_score" for number in CWE_SCORE_NUMBERS),
+)
+
 
 FACT_FEATURE_MAP = {
     SemanticFactKind.ALLOCATION: "allocation_count",
@@ -71,7 +92,7 @@ FACT_FEATURE_MAP = {
 
 
 class SemanticFeatureExtractor:
-    schema_version = "semantic-v1"
+    schema_version = "semantic-cwe-v2"
 
     def extract(
         self,
@@ -79,8 +100,9 @@ class SemanticFeatureExtractor:
         *,
         caller_count: int,
         callee_count: int,
+        cwe_hypotheses: list[CweHypothesis] | None = None,
     ) -> dict[str, float]:
-        features = {name: 0.0 for name in FEATURE_SCHEMA_SEMANTIC_V1}
+        features = {name: 0.0 for name in FEATURE_SCHEMA_SEMANTIC_CWE_V2}
         structural = semantic_analysis.structural
         function = structural.function
         features.update(
@@ -108,6 +130,41 @@ class SemanticFeatureExtractor:
         if confidences:
             features["mean_fact_confidence"] = sum(confidences) / len(confidences)
             features["max_fact_confidence"] = max(confidences)
+        hypotheses = sorted(
+            cwe_hypotheses or [], key=lambda item: (-item.confidence, item.cwe)
+        )
+        features["cwe_hypothesis_count"] = float(len(hypotheses))
+        if hypotheses:
+            features["cwe_top1_confidence"] = hypotheses[0].confidence
+            second = hypotheses[1].confidence if len(hypotheses) > 1 else 0.0
+            features["cwe_top1_top2_margin"] = hypotheses[0].confidence - second
+        families = {
+            family
+            for hypothesis in hypotheses
+            for family in [expert_for_cwe(hypothesis.cwe)]
+            if family is not None
+        }
+        features["cwe_cross_family_count"] = float(len(families))
+        group_features = {
+            ExpertFamily.MEMORY_SAFETY: "cwe_memory_score",
+            ExpertFamily.INTEGER_SIZE_TYPE: "cwe_integer_score",
+            ExpertFamily.TAINT_API_CONTRACT: "cwe_taint_score",
+            ExpertFamily.CONTROL_STATE_ERROR: "cwe_control_score",
+            ExpertFamily.CONCURRENCY_TOCTOU: "cwe_concurrency_score",
+        }
+        for hypothesis in hypotheses:
+            family = expert_for_cwe(hypothesis.cwe)
+            group_feature = group_features.get(family)
+            if group_feature is not None:
+                features[group_feature] = max(
+                    features[group_feature], hypothesis.confidence
+                )
+            number = cwe_number(hypothesis.cwe)
+            score_feature = f"cwe_{number}_score"
+            if score_feature in features:
+                features[score_feature] = max(
+                    features[score_feature], hypothesis.confidence
+                )
         if any(not math.isfinite(value) for value in features.values()):
             raise ValueError("Semantic features must be finite")
         return features

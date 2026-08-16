@@ -48,7 +48,7 @@ class CandidateGateConfig:
 
 @dataclass(slots=True)
 class AnalysisConfig:
-    backend: str = "legacy"
+    backend: str = "semantic"
     max_candidates_per_project: int = 50
     context_lines: int = 25
     max_context_characters: int = 30_000
@@ -141,7 +141,7 @@ class AppConfig:
                 threshold=float(values.get("CANDIDATE_GATE_THRESHOLD", "0.40"))
             ),
             analysis=AnalysisConfig(
-                backend=values.get("ANALYSIS_BACKEND", "legacy").strip().lower(),
+                backend=values.get("ANALYSIS_BACKEND", "semantic").strip().lower(),
                 max_candidates_per_project=int(values.get("MAX_CANDIDATES", "50")),
                 context_lines=int(values.get("CONTEXT_LINES", "25")),
                 max_context_characters=int(values.get("MAX_CONTEXT_CHARACTERS", "30000")),

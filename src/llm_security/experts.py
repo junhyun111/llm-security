@@ -39,7 +39,7 @@ class ExpertRunner:
         model: str,
         context_builder: ContextBuilder,
         models_by_family: dict[ExpertFamily, str] | None = None,
-        prompt_version: str = "expert-v3-five-expert",
+        prompt_version: str = "expert-v4-cwe-hypothesis",
     ) -> None:
         self.client = client
         self.model = model
@@ -120,7 +120,7 @@ class BatchedExpertRunner:
     which guarantees at most one successful detection completion per run.
     """
 
-    prompt_version = "batched-expert-v2-five-expert"
+    prompt_version = "batched-expert-v3-cwe-hypothesis"
 
     def __init__(
         self,
@@ -355,6 +355,7 @@ class BatchedExpertRunner:
                     "task_id": task_id,
                     "expert": expert.value,
                     "static_evidence": context.evidence_text,
+                    "static_cwe_hypotheses": context.cwe_hypotheses_text,
                     "security_knowledge": context.knowledge_text,
                 }
             )

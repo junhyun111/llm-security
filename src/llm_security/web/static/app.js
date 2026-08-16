@@ -131,6 +131,7 @@ function renderMetrics(summary) {
   const values = [
     ['분석 소스', `${summary.source_file_count}개`],
     ['정적 후보', `${summary.candidate_count}개`],
+    ['정적 CWE 후보', `${summary.cwe_hypothesis_count || 0}개`],
     ['취약점', `${summary.finding_count}개`],
     ['API 호출', `${summary.request_count || 0} / 1회`],
     ['전문가 작업', `${summary.submitted_expert_task_count || 0}개`],
@@ -159,6 +160,7 @@ function renderFinding(bundle) {
   const node = findingTemplate.content.cloneNode(true);
   const finding = bundle.finding;
   const validation = bundle.validation;
+  const cweHypotheses = bundle.candidate?.cwe_hypotheses || [];
   node.querySelector('.finding-title').textContent = finding.title;
   node.querySelector('.location').textContent = `${finding.file}:${finding.line_start}-${finding.line_end} · ${finding.function}`;
   node.querySelector('.root-cause').textContent = finding.root_cause;
@@ -173,6 +175,9 @@ function renderFinding(bundle) {
   node.querySelector('.evidence-block').innerHTML = `
     <strong>로컬 검증 판단</strong><ul>${(validation.reasons || []).map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul>
     <strong>정적 근거 ID</strong><p>${(finding.evidence_ids || []).map(escapeHtml).join(', ') || '없음'}</p>
+    <strong>정적 CWE 후보 (LLM 검증 전)</strong><ul>${cweHypotheses.map((item) =>
+      `<li>${escapeHtml(item.cwe)} · ${Math.round(Number(item.confidence || 0) * 100)}% · ${escapeHtml((item.reasons || []).join('; '))}</li>`
+    ).join('') || '<li>없음</li>'}</ul>
     <strong>반증 근거</strong><ul>${(finding.evidence_against || []).map((x) => `<li>${escapeHtml(x)}</li>`).join('') || '<li>없음</li>'}</ul>
   `;
   const patchArea = node.querySelector('.patch-area');

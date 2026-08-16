@@ -75,7 +75,9 @@ def build_parser() -> argparse.ArgumentParser:
     anchor_parser.add_argument("--dev", required=True)
     anchor_parser.add_argument("--env-file", default=".env")
     anchor_parser.add_argument("--target-rare-recall", type=float, default=0.95)
-    anchor_parser.add_argument("--output", default="models/router-anchor-rare.pkl")
+    anchor_parser.add_argument(
+        "--output", default="artifacts/phase2e/router_anchor_rare_v2.pkl"
+    )
 
     utility_parser = subparsers.add_parser(
         "train-utility-router",
@@ -99,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     utility_parser.add_argument("--false-positive-weight", type=float, default=0.50)
     utility_parser.add_argument("--unsupported-weight", type=float, default=0.25)
     utility_parser.add_argument(
-        "--output", default="artifacts/phase2e/router_top2_full5_v2.pkl"
+        "--output", default="artifacts/phase2e/router_top2_full5_v4.pkl"
     )
 
     evaluate_utility_parser = subparsers.add_parser(
@@ -272,6 +274,7 @@ def build_parser() -> argparse.ArgumentParser:
     phase2e_parser.add_argument("--target-gate-retention", type=float, default=0.98)
     phase2e_parser.add_argument("--target-routing-coverage", type=float, default=0.95)
     _add_semantic_safety_options(phase2e_parser)
+    _add_analysis_checkpoint_options(phase2e_parser)
 
     phase2e_prepare_parser = subparsers.add_parser(
         "phase2e-prepare",
@@ -285,10 +288,11 @@ def build_parser() -> argparse.ArgumentParser:
     phase2e_prepare_parser.add_argument(
         "--backend",
         choices=("all", "legacy", "semantic"),
-        default="all",
-        help="Prepare both backends or rerun only one backend.",
+        default="semantic",
+        help="Prepare semantic-cwe-v2 by default, or explicitly request legacy/all.",
     )
     _add_semantic_safety_options(phase2e_prepare_parser)
+    _add_analysis_checkpoint_options(phase2e_prepare_parser)
     return parser
 
 
@@ -643,6 +647,8 @@ def main(argv: list[str] | None = None) -> int:
                 target_routing_coverage=args.target_routing_coverage,
                 semantic_max_source_bytes=_source_limit_bytes(args.max_source_mb),
                 semantic_parse_timeout_ms=_parse_timeout_ms(args.parse_timeout_seconds),
+                analysis_checkpoint_every_cases=args.checkpoint_every,
+                resume_analysis=not args.no_resume,
                 data_directory=args.data_dir,
                 artifact_directory=args.artifacts_dir,
                 output_directory=args.output,
@@ -659,6 +665,8 @@ def main(argv: list[str] | None = None) -> int:
                 seed=args.seed,
                 semantic_max_source_bytes=_source_limit_bytes(args.max_source_mb),
                 semantic_parse_timeout_ms=_parse_timeout_ms(args.parse_timeout_seconds),
+                analysis_checkpoint_every_cases=args.checkpoint_every,
+                resume_analysis=not args.no_resume,
                 data_directory=args.data_dir,
             ),
             progress=print,
@@ -715,6 +723,20 @@ def _add_semantic_safety_options(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=30,
         help="Tree-sitter parse timeout per source file (0 disables the timeout).",
+    )
+
+
+def _add_analysis_checkpoint_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=100,
+        help="Persist semantic-analysis progress after this many completed cases.",
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Discard matching Phase 2E analysis checkpoints and start the analysis again.",
     )
 
 

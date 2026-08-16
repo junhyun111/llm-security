@@ -7,6 +7,7 @@ from typing import Iterable, Iterator
 
 from .models import (
     Candidate,
+    CweHypothesis,
     Evidence,
     ExpertAssignment,
     ExpertFamily,
@@ -114,19 +115,18 @@ def _case_from_raw(raw: dict) -> ProjectCase:
     )
 
 
+def case_from_dict(raw: dict) -> ProjectCase:
+    """Restore a ProjectCase from the JSON-compatible project schema."""
+    return _case_from_raw(raw)
+
+
 def write_router_samples_jsonl(samples: Iterable[RouterSample], path: str | Path) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", encoding="utf-8") as handle:
         for sample in samples:
             handle.write(
-                json.dumps(
-                    {
-                        "candidate": to_dict(sample.candidate),
-                        "labels": [label.value for label in sample.labels],
-                    },
-                    ensure_ascii=False,
-                )
+                json.dumps(router_sample_to_dict(sample), ensure_ascii=False)
                 + "\n"
             )
 
@@ -139,50 +139,26 @@ def load_router_samples_jsonl(path: str | Path) -> list[RouterSample]:
                 continue
             try:
                 raw = json.loads(line)
-                item = raw["candidate"]
-                candidate = Candidate(
-                    candidate_id=item["candidate_id"],
-                    project_id=item["project_id"],
-                    file=item["file"],
-                    function=item["function"],
-                    line_start=int(item["line_start"]),
-                    line_end=int(item["line_end"]),
-                    code=item.get("code", ""),
-                    evidence=[
-                        Evidence(
-                            evidence_id=evidence["evidence_id"],
-                            kind=evidence["kind"],
-                            file=evidence["file"],
-                            line=int(evidence["line"]),
-                            expression=evidence["expression"],
-                            function=str(evidence.get("function", item["function"])),
-                            subject=evidence.get("subject"),
-                            object=evidence.get("object"),
-                            facts=dict(evidence.get("facts", {})),
-                        )
-                        for evidence in item.get("evidence", [])
-                    ],
-                    features={str(key): float(value) for key, value in item["features"].items()},
-                    suspicion_score=float(
-                        item.get("suspicion_score", item.get("static_score", 0.0))
-                    ),
-                    callers=[str(value) for value in item.get("callers", [])],
-                    callees=[str(value) for value in item.get("callees", [])],
-                    feature_schema_version=str(
-                        item.get("feature_schema_version", "legacy-v1")
-                    ),
-                )
-                samples.append(
-                    RouterSample(
-                        candidate=candidate,
-                        labels=[ExpertFamily(value) for value in raw["labels"]],
-                    )
-                )
+                samples.append(router_sample_from_dict(raw))
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
                 raise ValueError(
                     f"Invalid router sample JSONL at line {line_number}: {error}"
                 ) from error
     return samples
+
+
+def router_sample_to_dict(sample: RouterSample) -> dict:
+    return {
+        "candidate": to_dict(sample.candidate),
+        "labels": [label.value for label in sample.labels],
+    }
+
+
+def router_sample_from_dict(raw: dict) -> RouterSample:
+    return RouterSample(
+        candidate=candidate_from_dict(raw["candidate"]),
+        labels=[ExpertFamily(value) for value in raw["labels"]],
+    )
 
 
 def write_utility_samples_jsonl(
@@ -268,6 +244,7 @@ def utility_sample_to_dict(sample: UtilitySample) -> dict:
             "features": candidate.features,
             "suspicion_score": candidate.suspicion_score,
             "feature_schema_version": candidate.feature_schema_version,
+            "cwe_hypotheses": to_dict(candidate.cwe_hypotheses),
         },
         "assignment": to_dict(sample.assignment),
         "success": sample.success,
@@ -288,7 +265,7 @@ def utility_sample_to_dict(sample: UtilitySample) -> dict:
     }
 
 
-def _candidate_from_raw(item: dict) -> Candidate:
+def candidate_from_dict(item: dict) -> Candidate:
     return Candidate(
         candidate_id=item["candidate_id"],
         project_id=item["project_id"],
@@ -316,4 +293,24 @@ def _candidate_from_raw(item: dict) -> Candidate:
         callers=[str(value) for value in item.get("callers", [])],
         callees=[str(value) for value in item.get("callees", [])],
         feature_schema_version=str(item.get("feature_schema_version", "legacy-v1")),
+        cwe_hypotheses=_cwe_hypotheses_from_raw(item),
     )
+
+
+def _candidate_from_raw(item: dict) -> Candidate:
+    """Backward-compatible internal alias for older dataset readers."""
+    return candidate_from_dict(item)
+
+
+def _cwe_hypotheses_from_raw(item: dict) -> list[CweHypothesis]:
+    return [
+        CweHypothesis(
+            cwe=str(hypothesis["cwe"]),
+            confidence=float(hypothesis["confidence"]),
+            evidence_ids=[
+                str(value) for value in hypothesis.get("evidence_ids", [])
+            ],
+            reasons=[str(value) for value in hypothesis.get("reasons", [])],
+        )
+        for hypothesis in item.get("cwe_hypotheses", [])
+    ]

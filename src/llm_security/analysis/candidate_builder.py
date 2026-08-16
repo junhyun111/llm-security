@@ -4,6 +4,7 @@ import hashlib
 
 from ..models import Candidate, ProjectCase
 from .api_semantics import ApiCatalog
+from .cwe_hypotheses import StaticCweHypothesisEngine
 from .evidence_normalizer import SemanticEvidenceNormalizer
 from .features import SemanticFeatureExtractor
 from .semantic_analyzer import SemanticProgramAnalysis
@@ -18,11 +19,15 @@ class SemanticCandidateBuilder:
         feature_extractor: SemanticFeatureExtractor | None = None,
         evidence_normalizer: SemanticEvidenceNormalizer | None = None,
         suspicion_scorer: SuspicionScorer | None = None,
+        cwe_hypothesis_engine: StaticCweHypothesisEngine | None = None,
     ) -> None:
         self.catalog = catalog or ApiCatalog.default()
         self.feature_extractor = feature_extractor or SemanticFeatureExtractor()
         self.evidence_normalizer = evidence_normalizer or SemanticEvidenceNormalizer()
         self.suspicion_scorer = suspicion_scorer or SuspicionScorer()
+        self.cwe_hypothesis_engine = (
+            cwe_hypothesis_engine or StaticCweHypothesisEngine()
+        )
 
     def build(
         self,
@@ -38,13 +43,16 @@ class SemanticCandidateBuilder:
                 continue
             callers = sorted(program.callers.get(function_key, set()))
             callees = sorted(program.callees.get(function_key, set()))
+            evidence = self.evidence_normalizer.normalize(semantic_function)
+            cwe_hypotheses = self.cwe_hypothesis_engine.infer(evidence)
             features = self.feature_extractor.extract(
                 semantic_function,
                 caller_count=len(callers),
                 callee_count=len(callees),
+                cwe_hypotheses=cwe_hypotheses,
             )
             digest = hashlib.sha1(
-                f"{case.case_id}:{function.file}:{function.name}:{function.line_start}:semantic-v1".encode(
+                f"{case.case_id}:{function.file}:{function.name}:{function.line_start}:{self.feature_extractor.schema_version}".encode(
                     "utf-8"
                 )
             ).hexdigest()[:16]
@@ -57,12 +65,13 @@ class SemanticCandidateBuilder:
                     line_start=function.line_start,
                     line_end=function.line_end,
                     code=function.code,
-                    evidence=self.evidence_normalizer.normalize(semantic_function),
+                    evidence=evidence,
                     features=features,
                     suspicion_score=self.suspicion_scorer.score(features),
                     callers=callers,
                     callees=callees,
                     feature_schema_version=self.feature_extractor.schema_version,
+                    cwe_hypotheses=cwe_hypotheses,
                 )
             )
         return sorted(

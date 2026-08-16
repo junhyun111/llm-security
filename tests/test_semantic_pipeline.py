@@ -138,7 +138,7 @@ def test_semantic_evidence_is_included_in_expert_context() -> None:
     assert "No matching" not in context.evidence_text
 
 
-def test_factory_defaults_to_legacy_and_allows_semantic_opt_in() -> None:
+def test_factory_defaults_to_semantic_and_allows_legacy_opt_in() -> None:
     from llm_security.analysis import SemanticStaticAnalyzer
     from llm_security.config import AppConfig
     from llm_security.factory import build_pipeline
@@ -146,12 +146,12 @@ def test_factory_defaults_to_legacy_and_allows_semantic_opt_in() -> None:
 
     config = AppConfig()
     config.model.api_key = "test-key"
-    legacy = build_pipeline(config, _Router())
-    assert isinstance(legacy.analyzer, LightweightStaticAnalyzer)
-
-    config.analysis.backend = "semantic"
     semantic = build_pipeline(config, _Router())
     assert isinstance(semantic.analyzer, SemanticStaticAnalyzer)
+
+    config.analysis.backend = "legacy"
+    legacy = build_pipeline(config, _Router())
+    assert isinstance(legacy.analyzer, LightweightStaticAnalyzer)
 
 
 def test_semantic_validator_uses_only_protective_guard_at_finding_sink() -> None:

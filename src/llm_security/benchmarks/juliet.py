@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Iterable
 
 from ..analysis.frontend import AnalysisLimitError, TreeSitterFrontend
-from ..experiments.outcome_matching import expert_for_cwe
+from ..cwe import expert_for_cwe
 from ..datasets import iter_cases_jsonl
 from ..models import ExpertFamily, GroundTruth, ProjectCase, to_dict
 

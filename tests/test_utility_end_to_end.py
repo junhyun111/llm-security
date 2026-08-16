@@ -26,7 +26,7 @@ def _candidate(candidate_id: str, line: int, score: float) -> Candidate:
         evidence=[Evidence("EV1", "memory_sink", "a.c", line, "p[i]", "f")],
         features={"memory_sink_count": 1.0},
         suspicion_score=score,
-        feature_schema_version="semantic-v1",
+        feature_schema_version="semantic-cwe-v2",
     )
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from ..cwe import cwe_categories, expert_for_cwe
 from ..models import Candidate, ExpertFamily, Finding, GroundTruth
 from ..datasets import UTILITY_OUTCOME_LABEL_VERSION
 
@@ -77,29 +78,6 @@ class FindingTruthMatcher:
         return self.evaluate(finding, truth, candidate).matched
 
 
-_CWE_CATEGORIES: dict[str, str] = {}
-
-
-def _register(category: str, *cwes: int) -> None:
-    for cwe in cwes:
-        _CWE_CATEGORIES[str(cwe)] = category
-
-
-_register(
-    "memory_spatial",
-    119, 120, 121, 122, 123, 124, 125, 126, 127, 129, 131, 170, 680, 787, 788,
-)
-_register("memory_temporal", 401, 415, 416, 457, 476, 562, 590, 761, 762, 763)
-_register("integer", 190, 191, 192, 194, 195, 196, 197, 369, 681, 682)
-_register(
-    "taint_api",
-    15, 20, 22, 23, 36, 73, 74, 77, 78, 79, 89, 90, 91, 94, 114, 134, 247,
-    426, 427, 601,
-)
-_register("control_state", 252, 253, 273, 394, 457, 478, 670, 703, 754, 755)
-_register("concurrency", 362, 366, 367, 667, 764, 765, 821, 833)
-
-
 _EXPERT_CATEGORIES: dict[ExpertFamily, set[str]] = {
     # E1 intentionally combines spatial and temporal memory safety.  The
     # MEMORY_SAFETY enum retains the historical ``memory_bounds`` wire value.
@@ -158,27 +136,6 @@ _INTEGER_TO_MEMORY_EVIDENCE = {
     "cast_to_size_sink",
 }
 _TAINT_TO_SINK_EVIDENCE = {"source_to_sink", "unsanitized_source_to_sink"}
-
-
-def cwe_categories(cwes: list[str]) -> set[str]:
-    return {
-        _CWE_CATEGORIES[number]
-        for value in cwes
-        for number in [_normalize_cwe(value)]
-        if number in _CWE_CATEGORIES
-    }
-
-
-def expert_for_cwe(cwe: str) -> ExpertFamily | None:
-    category = _CWE_CATEGORIES.get(_normalize_cwe(cwe))
-    return {
-        "memory_spatial": ExpertFamily.MEMORY_SAFETY,
-        "memory_temporal": ExpertFamily.MEMORY_SAFETY,
-        "integer": ExpertFamily.INTEGER_SIZE_TYPE,
-        "taint_api": ExpertFamily.TAINT_API_CONTRACT,
-        "control_state": ExpertFamily.CONTROL_STATE_ERROR,
-        "concurrency": ExpertFamily.CONCURRENCY_TOCTOU,
-    }.get(category)
 
 
 def _truth_categories(truth: GroundTruth) -> set[str]:
@@ -246,8 +203,3 @@ def _location_matches(finding: Finding, truth: GroundTruth) -> bool:
         and finding.line_start <= truth.line_end
         and finding.line_end >= truth.line_start
     )
-
-
-def _normalize_cwe(value: str) -> str:
-    match = re.search(r"(?:CWE[-_: ]*)?(\d+)", str(value), re.I)
-    return match.group(1) if match else ""

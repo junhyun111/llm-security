@@ -19,7 +19,7 @@
 ```dotenv
 OPENROUTER_API_KEY=your-key
 RUN_PAID_EXPERIMENTS=1
-WEB_ROUTER_ARTIFACT=artifacts/phase2e/router_top2_full5_v2.pkl
+WEB_ROUTER_ARTIFACT=artifacts/phase2e/router_top2_full5_v4.pkl
 WEB_HOST=127.0.0.1
 WEB_PORT=8000
 WEB_CANDIDATE_GATE_ENABLED=true
@@ -89,7 +89,7 @@ python -m llm_security.cli phase2e-prepare `
 python -m llm_security.cli train-anchor-router `
   --train data\phase2e\semantic\router_train.jsonl `
   --dev data\phase2e\semantic\router_dev.jsonl `
-  --output artifacts\phase2e\router_anchor_rare_v1.pkl
+  --output artifacts\phase2e\router_anchor_rare_v2.pkl
 ```
 
 3. Utility Router용 Expert×Model 성능 행렬 수집:
@@ -141,20 +141,20 @@ python -m llm_security.cli train-utility-router `
   --train data\utility\outcomes_train.jsonl `
   --dev data\utility\outcomes_dev.jsonl `
   --target-truth-recall 0.95 `
-  --output artifacts\phase2e\router_top2_full5_v2.pkl
+  --output artifacts\phase2e\router_top2_full5_v4.pkl
 ```
 
 `--gate-train`을 생략하면 dev 프로젝트를 절반씩 나눠 한쪽으로 Escalation Gate를
 학습하고 다른 쪽으로 recall 제약하에서 최소 비용 threshold를 고릅니다. test는 이
 명령에서 읽지 않습니다. Best Single Expert/Model과 Best Fixed-2도 이 calibration
-split에서 고정하며 test 결과를 보고 선택하지 않습니다. 이 변경의 artifact format은
-v3이므로 기존 파일이 있더라도 위 명령으로 다시 학습해 덮어써야 합니다. 학습 완료 후
+split에서 고정하며 test 결과를 보고 선택하지 않습니다. CWE hypothesis 입력을 포함한
+artifact format은 v4이므로 기존 파일이 있더라도 위 명령으로 다시 학습해야 합니다. 학습 완료 후
 test는 한 번만 평가합니다.
 
 ```powershell
 python -m llm_security.cli evaluate-utility-router `
-  --artifact artifacts\phase2e\router_top2_full5_v2.pkl `
-  --anchor-artifact artifacts\phase2e\router_anchor_rare_v1.pkl `
+  --artifact artifacts\phase2e\router_top2_full5_v4.pkl `
+  --anchor-artifact artifacts\phase2e\router_anchor_rare_v2.pkl `
   --test data\utility\outcomes_test.jsonl `
   --output results\utility_test.json
 ```
@@ -185,7 +185,7 @@ Router outcome에 포함된 후보만 평가하면 정적 분석기와 Candidate
 python -m llm_security.cli evaluate-utility-end-to-end `
   --cases data\benchmark\cases_test.jsonl `
   --outcomes data\utility\outcomes_test.jsonl `
-  --artifact artifacts\phase2e\router_top2_full5_v2.pkl `
+  --artifact artifacts\phase2e\router_top2_full5_v4.pkl `
   --candidate-gate-enabled `
   --output results\utility_end_to_end.json
 ```
@@ -388,7 +388,23 @@ ProgramAnalysis
 
 ## Semantic analysis backend and Candidate Gate
 
-Phase 2D는 semantic fact를 고정된 `semantic-v1` feature, Evidence, suspicion score와 Candidate로 변환합니다. Candidate는 모두 생성한 뒤 Gate에서 별도로 판정하며, `MAX_CANDIDATES` 제한은 Gate 통과 후 적용됩니다.
+Phase 2D는 semantic fact를 고정된 `semantic-cwe-v2` feature, Evidence, suspicion
+score, 정적 CWE hypothesis와 Candidate로 변환합니다. CWE hypothesis는 GT가 아니라
+코드와 Evidence만으로 만든 반증 가능한 후보입니다. Candidate는 모두 생성한 뒤
+Gate에서 별도로 판정하며, `MAX_CANDIDATES` 제한은 Gate 통과 후 적용됩니다.
+
+CWE 포함 경로는 다음처럼 동작합니다.
+
+```text
+코드 -> Semantic Evidence -> 정적 CWE 가설과 신뢰도
+     -> CWE별/계열별 Router feature -> Top-2 또는 Full-5 Expert
+     -> LLM의 CWE 확인·기각·수정 -> Evidence 기반 Validator
+```
+
+정적 CWE 가설은 ARVO나 Juliet의 정답 CWE를 읽지 않습니다. 학습 데이터의 정답은
+Expert utility label을 만드는 데만 사용되고, 실제 추론 시 Router 입력은 업로드된 코드와
+정적 분석 Evidence로만 계산됩니다. 따라서 CWE 이름만 맞추는 분류기가 아니라
+`어떤 Expert를 호출해야 검증된 취약점을 가장 잘 찾는가`를 학습합니다.
 
 ```text
 StructuralAnalyzer → SemanticAnalyzer
@@ -400,12 +416,16 @@ StructuralAnalyzer → SemanticAnalyzer
 분석 backend는 `.env`에서 선택합니다.
 
 ```dotenv
-ANALYSIS_BACKEND=legacy
+ANALYSIS_BACKEND=semantic
 CANDIDATE_GATE_ENABLED=false
 CANDIDATE_GATE_THRESHOLD=0.40
 ```
 
-기본값은 아직 `legacy`입니다. 기존 Router와 semantic Candidate를 섞지 않도록 Candidate와 Router가 `legacy-v1` 또는 `semantic-v1` feature schema를 기록하고, schema가 다르면 inference를 중단합니다. Router artifact format은 v4이며 기존 artifact는 재학습 후 사용해야 합니다. Semantic Router 데이터 재생성과 Gate threshold calibration은 Phase 2E에서 수행합니다.
+기본값은 `semantic`입니다. 기존 Router와 semantic Candidate를 섞지 않도록
+Candidate와 Router가 `legacy-v1` 또는 `semantic-cwe-v2` feature schema를 기록하고,
+schema가 다르면 inference를 중단합니다. Utility Router artifact format은 v4이며 기존
+artifact와 기존 semantic Router JSONL은 재사용하지 않습니다. Semantic Router 데이터
+재생성과 Gate threshold calibration은 Phase 2E에서 수행합니다.
 
 ## 실제 프로젝트 분석
 
@@ -460,6 +480,7 @@ python -m llm_security.cli phase2e `
 python -m llm_security.cli phase2e-prepare `
   --cases data\arvo\cases_all.jsonl `
   --data-dir data\phase2e `
+  --backend semantic `
   --seed 2026
 ```
 
@@ -469,8 +490,19 @@ in the benchmark denominator and recorded in
 `data/phase2e/analysis_failures/semantic_<split>.jsonl`. Override them with
 `--max-source-mb` and `--parse-timeout-seconds` when needed.
 
+Semantic 분석은 기본적으로 100 case마다
+`data/phase2e/analysis_checkpoints/semantic_<split>_prepare.json`에 원자적으로
+checkpoint를 저장합니다. `Ctrl+C`로 중단해도 같은 명령을 다시 실행하면 마지막
+checkpoint 다음 case부터 자동 재개합니다. 중단 시점과 가장 최근 checkpoint 사이의
+최대 99 case만 다시 분석합니다. 처음부터 다시 실행하려면 `--no-resume`을 추가하고,
+간격을 바꾸려면 `--checkpoint-every 50`처럼 지정합니다.
+
 그 다음 `notebooks/01_train_router.ipynb`의 셀을 위에서부터 실행하면
-`artifacts/phase2e/router_legacy_v1.pkl`과
-`artifacts/phase2e/router_semantic_v1.pkl`이 생성됩니다.
+`artifacts/phase2e/router_anchor_rare_v2.pkl`이 생성됩니다. 현재 prompt/schema로
+수집한 `data/utility/outcomes_train.jsonl`과 `outcomes_dev.jsonl`도 있으면
+`artifacts/phase2e/router_top2_full5_v4.pkl`까지 생성됩니다. 기존
+`semantic-v1` JSONL과 v1-v3 Router artifact는 CWE feature가 없으므로 재사용할 수
+없습니다. 먼저 `phase2e-prepare --backend semantic`으로 Router JSONL을 다시 만든 뒤,
+현재 prompt/schema로 utility outcome을 다시 수집해 학습해야 합니다.
 
 함수 경계는 Tree-sitter C/C++ AST로 추출합니다. 현재 Router 특징은 portable 정적 신호이며, 이후 Clang·CodeQL·Joern adapter가 동일한 `Candidate`와 `Evidence` schema를 출력하도록 확장할 수 있습니다.
