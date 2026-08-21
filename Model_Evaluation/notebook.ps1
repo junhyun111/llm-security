@@ -5,8 +5,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 $evaluationRoot = (Resolve-Path -LiteralPath $PSScriptRoot).Path
-$env:UV_CACHE_DIR = Join-Path $evaluationRoot "cache\uv"
-$env:UV_PYTHON_INSTALL_DIR = Join-Path $evaluationRoot "cache\python"
 $env:PYTHONPATH = Join-Path $evaluationRoot "src"
 $env:PYTHONDONTWRITEBYTECODE = "1"
 
@@ -16,7 +14,13 @@ $target = if ($Notebook -eq "lab") {
     Join-Path $evaluationRoot ($Notebook + ".ipynb")
 }
 
-& uv run --python 3.13 --no-project `
-    --with-requirements (Join-Path $evaluationRoot "requirements.txt") `
-    jupyter lab $target
+$venvCandidates = @(
+    (Join-Path $evaluationRoot ".venv\Scripts\python.exe"),
+    (Join-Path (Split-Path $evaluationRoot -Parent) ".venv\Scripts\python.exe")
+)
+$venvPython = $venvCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if (-not $venvPython) {
+    throw "가상환경이 없습니다. Model_Evaluation 또는 프로젝트 루트의 .venv에 ipykernel/jupyter를 설치하세요."
+}
+& $venvPython -m jupyter lab $target
 exit $LASTEXITCODE

@@ -9,7 +9,7 @@ from .adapters.llm_security import (
     candidate_from_dict,
     load_cases,
 )
-from .api_budget import ApiBudget, BudgetExceeded, BudgetedLLMClient
+from .api_budget import LoggedLLMClient
 from .candidates import StreamingCachedCandidateAnalyzer
 from .jsonl import append_jsonl, iter_jsonl
 from .paths import EVALUATION_ROOT, require_within, write_json
@@ -23,10 +23,6 @@ def run_live_detection(
     candidate_cache: str | Path,
     output_path: str | Path,
     ledger_path: str | Path,
-    execute_paid: bool,
-    max_requests: int,
-    max_usd: float,
-    reserve_usd_per_request: float = 0.10,
     max_cases: int = 0,
     max_candidates_per_case: int = 4,
     candidate_gate_enabled: bool = False,
@@ -37,31 +33,31 @@ def run_live_detection(
     activate_parent_package()
     from llm_security.aggregation import FindingAggregator
     from llm_security.experiments.outcome_matching import FindingTruthMatcher
-    from llm_security.experts import ExpertRunner
+    from llm_security.experts import BatchedExpertRunner
     from llm_security.factory import build_context_builder, build_openrouter_client
     from llm_security.models import to_dict
     from llm_security.pipeline import VulnerabilityPipeline
     from llm_security.routing import BudgetedUtilityRouter, CandidateGate
     from llm_security.validation import EvidenceValidator
 
-    config = _paid_config(env_file, execute_paid)
+    config = _api_config(env_file)
     destination = require_within(output_path, EVALUATION_ROOT)
     ledger = require_within(ledger_path, EVALUATION_ROOT)
     completed = {
         str(row["case_id"]) for row in iter_jsonl(destination)
     } if destination.is_file() else set()
-    budget = ApiBudget(max_requests, max_usd, reserve_usd_per_request)
-    client = BudgetedLLMClient(build_openrouter_client(config), budget, ledger)
+    client = LoggedLLMClient(build_openrouter_client(config), ledger)
     router = BudgetedUtilityRouter.load(artifact_path)
     cached_analyzer = StreamingCachedCandidateAnalyzer(candidate_cache)
     pipeline = VulnerabilityPipeline(
         analyzer=cached_analyzer,
         router=router,
-        expert_runner=ExpertRunner(
+        expert_runner=BatchedExpertRunner(
             client=client,
             model=config.model.expert_model,
             context_builder=build_context_builder(config),
-            models_by_family=config.model.expert_models,
+            max_batch_characters=1_000_000,
+            max_tasks=max_candidates_per_case * 5,
         ),
         aggregator=FindingAggregator(),
         validator=EvidenceValidator(
@@ -120,16 +116,17 @@ def run_live_detection(
             written += 1
             if progress:
                 progress(f"live detection: {seen} seen / {written} new")
-    except BudgetExceeded as error:
-        status = "budget_stopped_resumable"
+    except (KeyError, RuntimeError, TypeError, ValueError) as error:
+        status = "stopped_on_error_resumable"
         stop_reason = str(error)
     report = summarize_live_detection(destination)
     report.update(
         {
             "status": status,
             "stop_reason": stop_reason,
-            "requests_this_run": budget.requests,
-            "actual_cost_usd_this_run": budget.actual_usd,
+            "physical_requests_this_run": client.requests,
+            "actual_cost_usd_this_run": client.actual_usd,
+            "request_contract": "at most one physical detection request per case",
             "output": str(destination),
         }
     )
@@ -185,10 +182,6 @@ def run_patch_evaluation(
     output_path: str | Path,
     ledger_path: str | Path,
     commands: list[dict],
-    execute_paid: bool,
-    max_requests: int,
-    max_usd: float,
-    reserve_usd_per_request: float = 0.10,
     max_findings: int = 0,
     max_attempts: int = 2,
     only_ground_truth_matched: bool = True,
@@ -213,14 +206,13 @@ def run_patch_evaluation(
     from llm_security.repair import RepairWorkflow
     from llm_security.verification import TemporaryPatchVerifier, VerificationCommand
 
-    config = _paid_config(env_file, execute_paid)
+    config = _api_config(env_file)
     destination = require_within(output_path, EVALUATION_ROOT)
     ledger = require_within(ledger_path, EVALUATION_ROOT)
     completed = {
         str(row["finding_id"]) for row in iter_jsonl(destination)
     } if destination.is_file() else set()
-    budget = ApiBudget(max_requests, max_usd, reserve_usd_per_request)
-    client = BudgetedLLMClient(build_openrouter_client(config), budget, ledger)
+    client = LoggedLLMClient(build_openrouter_client(config), ledger)
     verify_commands = [VerificationCommand(
         name=str(item["name"]),
         command=[str(value) for value in item["command"]],
@@ -325,15 +317,15 @@ def run_patch_evaluation(
                     progress(f"patch evaluation: {attempted} new findings")
     except _PatchLimitReached:
         status = "configured_limit_reached_resumable"
-    except BudgetExceeded as error:
-        status = "budget_stopped_resumable"
+    except (KeyError, RuntimeError, TypeError, ValueError) as error:
+        status = "stopped_on_error_resumable"
         stop_reason = str(error)
     report = summarize_patch_evaluation(destination)
     report.update({
         "status": status,
         "stop_reason": stop_reason,
-        "requests_this_run": budget.requests,
-        "actual_cost_usd_this_run": budget.actual_usd,
+        "physical_requests_this_run": client.requests,
+        "actual_cost_usd_this_run": client.actual_usd,
         "verification_commands": commands,
         "output": str(destination),
     })
@@ -357,6 +349,180 @@ def summarize_patch_evaluation(path: str | Path) -> dict[str, object]:
     }
 
 
+def run_batched_patch_evaluation(
+    *,
+    env_file: str | Path,
+    detection_path: str | Path,
+    output_path: str | Path,
+    ledger_path: str | Path,
+    commands: list[dict],
+    max_cases: int = 0,
+    progress: Callable[[str], None] | None = print,
+) -> dict[str, object]:
+    """Patch all validated findings from one Juliet case in one API request."""
+    activate_parent_package()
+    from llm_security.factory import build_openrouter_client
+    from llm_security.models import (
+        ExpertFamily,
+        Finding,
+        ValidationResult,
+        ValidationVerdict,
+        to_dict,
+    )
+    from llm_security.patching import BatchPatchProposal, LLMBatchPatchAgent
+    from llm_security.verification import TemporaryPatchVerifier, VerificationCommand
+
+    config = _api_config(env_file)
+    destination = require_within(output_path, EVALUATION_ROOT)
+    ledger = require_within(ledger_path, EVALUATION_ROOT)
+    completed = {
+        str(row["case_id"]) for row in iter_jsonl(destination)
+    } if destination.is_file() else set()
+    client = LoggedLLMClient(build_openrouter_client(config), ledger)
+    agent = LLMBatchPatchAgent(client, config.model.patch_model)
+    verifier = TemporaryPatchVerifier()
+    verify_commands = [
+        VerificationCommand(
+            name=str(item["name"]),
+            command=[str(value) for value in item["command"]],
+            timeout_seconds=float(item.get("timeout_seconds", 300.0)),
+        )
+        for item in commands
+    ]
+    status = "complete"
+    stop_reason = None
+    new_cases = 0
+    for detection in iter_jsonl(detection_path):
+        case_id = str(detection["case_id"])
+        if case_id in completed:
+            continue
+        if max_cases and new_cases >= max_cases:
+            status = "configured_limit_reached_resumable"
+            break
+        raw_result = detection["pipeline_result"]
+        candidates = {
+            raw["candidate_id"]: candidate_from_dict(raw)
+            for raw in raw_result.get("candidates", [])
+        }
+        validations = {
+            raw["finding_id"]: ValidationResult(
+                finding_id=raw["finding_id"],
+                verdict=ValidationVerdict(raw["verdict"]),
+                confidence=float(raw["confidence"]),
+                checks=dict(raw.get("checks", {})),
+                reasons=[str(value) for value in raw.get("reasons", [])],
+                model_used=raw.get("model_used"),
+            )
+            for raw in raw_result.get("validations", [])
+        }
+        matched = detection.get("matched_truth_ids_by_finding", {})
+        items = []
+        for raw in raw_result.get("findings", []):
+            finding_id = str(raw["finding_id"])
+            validation = validations.get(finding_id)
+            if (
+                validation is None
+                or validation.verdict.value != "validated"
+                or not matched.get(finding_id)
+            ):
+                continue
+            finding = Finding(
+                finding_id=finding_id,
+                candidate_id=str(raw["candidate_id"]),
+                expert=ExpertFamily(raw["expert"]),
+                title=str(raw["title"]),
+                root_cause=str(raw["root_cause"]),
+                consequence=str(raw["consequence"]),
+                file=str(raw["file"]),
+                function=str(raw["function"]),
+                line_start=int(raw["line_start"]),
+                line_end=int(raw["line_end"]),
+                cwes=[str(value) for value in raw.get("cwes", [])],
+                source=raw.get("source"),
+                sink=raw.get("sink"),
+                missing_guard=raw.get("missing_guard"),
+                trigger_path=[str(value) for value in raw.get("trigger_path", [])],
+                evidence_ids=[str(value) for value in raw.get("evidence_ids", [])],
+                confidence=float(raw["confidence"]),
+                preconditions=[str(value) for value in raw.get("preconditions", [])],
+                evidence_for=[str(value) for value in raw.get("evidence_for", [])],
+                evidence_against=[str(value) for value in raw.get("evidence_against", [])],
+                falsification_test=raw.get("falsification_test"),
+                model_id=raw.get("model_id"),
+                prompt_version=raw.get("prompt_version"),
+            )
+            items.append((finding, validation, candidates[finding.candidate_id]))
+        try:
+            if not items:
+                append_jsonl(
+                    destination,
+                    {
+                        "case_id": case_id,
+                        "attempted": False,
+                        "repaired": False,
+                        "finding_ids": [],
+                        "reason": "no ground-truth-matched validated finding",
+                    },
+                )
+            else:
+                proposal = agent.propose(items)
+                path_map = {
+                    str(virtual): str(raw_path)
+                    for raw_path, virtual in detection.get("raw_to_virtual", {}).items()
+                }
+                remapped = BatchPatchProposal(
+                    finding_ids=proposal.finding_ids,
+                    unified_diff=_remap_diff(proposal.unified_diff, path_map),
+                    summary=proposal.summary,
+                    model=proposal.model,
+                    usage=proposal.usage,
+                )
+                verification = verifier.verify(
+                    Path(str(detection["raw_package_path"])),
+                    remapped,
+                    verify_commands,
+                )
+                append_jsonl(
+                    destination,
+                    {
+                        "case_id": case_id,
+                        "attempted": True,
+                        "repaired": verification.fully_verified,
+                        "finding_ids": proposal.finding_ids,
+                        "proposal": to_dict(remapped),
+                        "verification": to_dict(verification),
+                    },
+                )
+            completed.add(case_id)
+            new_cases += 1
+            if progress:
+                progress(
+                    f"batched patches: {new_cases} new cases; "
+                    f"physical patch requests={client.requests}"
+                )
+        except (KeyError, RuntimeError, TypeError, ValueError) as error:
+            status = "stopped_on_error_resumable"
+            stop_reason = f"{case_id}: {type(error).__name__}: {error}"
+            break
+    rows = list(iter_jsonl(destination)) if destination.is_file() else []
+    attempted = [row for row in rows if row.get("attempted")]
+    repaired = sum(bool(row.get("repaired")) for row in attempted)
+    report = {
+        "status": status,
+        "stop_reason": stop_reason,
+        "case_count": len(rows),
+        "attempted_patch_case_count": len(attempted),
+        "verification_pass_case_count": repaired,
+        "verification_pass_rate": repaired / len(attempted) if attempted else 0.0,
+        "physical_patch_requests_this_run": client.requests,
+        "actual_cost_usd_this_run": client.actual_usd,
+        "request_contract": "at most one physical patch request per case",
+        "output": str(destination),
+    }
+    write_json(destination.with_suffix(".summary.json"), report)
+    return report
+
+
 class _PatchLimitReached(Exception):
     pass
 
@@ -371,12 +537,7 @@ class _RemappingPatchAgent:
         proposal = self.agent.propose(
             finding, validation, candidate, previous_failure=previous_failure
         )
-        diff = proposal.unified_diff
-        for virtual, raw in sorted(self.path_map.items(), key=lambda item: -len(item[0])):
-            diff = diff.replace(f"a/{virtual}", f"a/{raw}")
-            diff = diff.replace(f"b/{virtual}", f"b/{raw}")
-            diff = diff.replace(f"--- {virtual}", f"--- {raw}")
-            diff = diff.replace(f"+++ {virtual}", f"+++ {raw}")
+        diff = _remap_diff(proposal.unified_diff, self.path_map)
         return self.proposal_type(
             finding_id=proposal.finding_id,
             unified_diff=diff,
@@ -386,12 +547,18 @@ class _RemappingPatchAgent:
         )
 
 
-def _paid_config(env_file: str | Path, execute_paid: bool):
+def _remap_diff(diff: str, path_map: dict[str, str]) -> str:
+    for virtual, raw in sorted(path_map.items(), key=lambda item: -len(item[0])):
+        diff = diff.replace(f"a/{virtual}", f"a/{raw}")
+        diff = diff.replace(f"b/{virtual}", f"b/{raw}")
+        diff = diff.replace(f"--- {virtual}", f"--- {raw}")
+        diff = diff.replace(f"+++ {virtual}", f"+++ {raw}")
+    return diff
+
+
+def _api_config(env_file: str | Path):
     config = app_config(env_file)
-    if not execute_paid:
-        raise RuntimeError("Paid execution is locked; set the notebook flag explicitly")
-    if not config.runtime.allow_paid_experiments:
-        raise RuntimeError("Set RUN_PAID_EXPERIMENTS=1 in .env after reviewing the budget")
     if not config.model.api_key:
-        raise RuntimeError("OPENROUTER_API_KEY is missing")
+        raise RuntimeError("OPENROUTER_API_KEY is missing from .env")
+    config.model.max_output_tokens = max(config.model.max_output_tokens, 8_192)
     return config

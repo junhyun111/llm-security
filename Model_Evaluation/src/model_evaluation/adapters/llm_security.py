@@ -85,7 +85,11 @@ def active_experts():
     return ACTIVE_UTILITY_EXPERTS
 
 
-def expert_assignments(model_ids: list[str] | tuple[str, ...]):
+def expert_assignments(
+    model_ids: list[str] | tuple[str, ...],
+    *,
+    prompt_version: str = "batched-expert-v4-ko-cwe-hypothesis",
+):
     activate_parent_package()
     from llm_security.models import ACTIVE_UTILITY_EXPERTS, ExpertAssignment
 
@@ -93,7 +97,11 @@ def expert_assignments(model_ids: list[str] | tuple[str, ...]):
     if not models:
         raise ValueError("At least one canonical model ID is required")
     return [
-        ExpertAssignment(expert=expert, model_id=model)
+        ExpertAssignment(
+            expert=expert,
+            model_id=model,
+            prompt_version=prompt_version,
+        )
         for expert in ACTIVE_UTILITY_EXPERTS
         for model in models
     ]

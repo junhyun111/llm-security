@@ -54,11 +54,11 @@ The first completed run is summarized in [INITIAL_RESULTS.md](INITIAL_RESULTS.md
 
 ## Train and evaluate with LLM APIs
 
-Two executable notebooks now cover the paid experiment stages while keeping all
+Two executable notebooks cover the API experiment stages while keeping all
 generated files inside `Model_Evaluation`:
 
-- `train.ipynb`: materialize frozen train/dev splits, cache candidates, dry-run
-  the Expert x model request matrix, collect resumable outcomes, audit matrix
+- `train.ipynb`: materialize frozen train/dev splits, cache candidates, show
+  physical request counts, collect resumable batched outcomes, audit matrix
   completeness, train the Utility Router, fit the escalation gate, and calibrate
   the recall-constrained threshold.
 - `evaluation.ipynb`: materialize the untouched test split, collect its matching
@@ -73,23 +73,31 @@ powershell -ExecutionPolicy Bypass -File .\Model_Evaluation\notebook.ps1 train
 powershell -ExecutionPolicy Bypass -File .\Model_Evaluation\notebook.ps1 evaluation
 ```
 
-The required Python/Jupyter packages are installed into the isolated
-`Model_Evaluation/cache` directory by the launcher. The parent project's source
-code and the raw dataset remain read-only inputs.
+The project does not impose a Python version or create a virtual environment
+automatically. Create your own environment at `Model_Evaluation\.venv` or the
+project root `.venv` (the launcher detects both) and install the packages from
+`requirements.txt`. The
+parent project's source code and the raw dataset remain read-only inputs.
 
-### Paid-call safety and resumption
+In VS Code, select this interpreter for the notebooks:
 
-API execution needs both locks:
+```text
+D:\llm-security\.venv\Scripts\python.exe
+```
 
-1. set `RUN_PAID_EXPERIMENTS=1` in the parent `.env`;
-2. set `EXECUTE_PAID=True` in the notebook only after inspecting the dry-run.
 
-The notebook parameters `MAX_REQUESTS_PER_RUN`, `MAX_USD_PER_RUN`, and
-`RESERVE_USD_PER_REQUEST` enforce a per-run guard. Every completed outcome is
-appended immediately to JSONL. Re-running the cell resumes missing
-`case/candidate/assignment` jobs instead of paying for completed jobs again.
-Router training and final test evaluation refuse partial or duplicate matrices,
-including candidates for which every assignment row is still missing.
+### API execution and resumption
+
+Only `OPENROUTER_API_KEY` is required in the parent `.env`. There is no separate
+paid-run flag in the notebooks. All candidates and the five logical Expert tasks
+for one Juliet case are sent through `BatchedExpertRunner` in one physical API
+request. The five Expert outcomes remain separately attributed for Utility
+Router training, but they are not five separate API calls.
+
+Each completed case is atomically checkpointed. Re-running the collection cell
+skips completed cases, consolidates their outcome rows, and continues from the
+first missing case. Router training and final test evaluation refuse partial or
+duplicate matrices.
 
 `TRAIN_CASE_LIMIT`, `DEV_CASE_LIMIT`, and `TEST_CASE_LIMIT` default to `0`, which
 means the complete frozen split. Set a positive value only for a cheaper smoke or
@@ -118,7 +126,7 @@ counted as a verified repair. Patch application occurs only in a temporary copy;
 ```text
 work/router_training/cases/       full or limited train/dev cases
 work/router_training/candidates/  frozen semantic candidates
-work/router_training/outcomes/    resumable Expert x model matrices
+work/router_training/outcomes/    resumable batched Expert outcome matrices
 work/router_training/ledgers/     request/token/cost ledgers (no API key)
 artifacts/juliet_utility_router.pkl
 results/router_training/training_report.json

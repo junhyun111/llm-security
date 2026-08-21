@@ -141,7 +141,7 @@ def selected_candidate_manifest(
     positive_count = negative_count = 0
     for raw in iter_jsonl(cases_path):
         case = case_from_dict(raw)
-        selected = _select_candidates(
+        selected = select_matrix_candidates(
             analyzer.analyze(case),
             case.ground_truth,
             max_candidates=max_candidates_per_case,
@@ -167,7 +167,9 @@ def selected_candidate_manifest(
     }
 
 
-def _select_candidates(candidates, truths, *, max_candidates: int, hard_negatives: int):
+def select_matrix_candidates(
+    candidates, truths, *, max_candidates: int, hard_negatives: int
+):
     if max_candidates < 1 or hard_negatives < 0:
         raise ValueError("Candidate limits are invalid")
     positives = [item for item in candidates if any(_matches(item, truth) for truth in truths)]
