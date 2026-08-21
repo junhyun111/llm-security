@@ -78,6 +78,21 @@ def app_config(env_file: str | Path):
     return AppConfig.from_env(env_file)
 
 
+def evaluation_api_config(env_file: str | Path):
+    """Return the API configuration used only by this batch benchmark.
+
+    A batch response has to contain a complete JSON result for every Expert
+    task. Some reasoning providers spend the complete output budget on their
+    hidden reasoning channel and return ``content: null``. Disable that mode
+    for the evaluation calls so a notebook run needs only the API key and
+    reliably receives the schema-constrained answer.
+    """
+    config = app_config(env_file)
+    config.model.reasoning_enabled = False
+    config.model.reasoning_effort = None
+    return config
+
+
 def active_experts():
     activate_parent_package()
     from llm_security.models import ACTIVE_UTILITY_EXPERTS

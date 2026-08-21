@@ -6,7 +6,7 @@ from typing import Callable, Iterable
 
 from .adapters.llm_security import (
     activate_parent_package,
-    app_config,
+    evaluation_api_config,
     expert_assignments,
     load_cases,
     load_outcomes,
@@ -22,7 +22,7 @@ from .paths import EVALUATION_ROOT, require_within, write_json
 
 
 def resolve_models(env_file: str | Path, models: Iterable[str] = ()) -> list[str]:
-    config = app_config(env_file)
+    config = evaluation_api_config(env_file)
     explicit = [item.strip() for item in models if item.strip()]
     if explicit:
         unique = list(dict.fromkeys(explicit))
@@ -31,6 +31,22 @@ def resolve_models(env_file: str | Path, models: Iterable[str] = ()) -> list[str
                 "Batched evaluation uses exactly one physical model per case"
             )
         return unique
+    # The parent application's historical default is intentionally retained for
+    # its normal runtime, but it currently rejects the `temperature` parameter
+    # that the shared OpenRouter client sends.  An evaluation must start with
+    # only an API key, so when that untouched default is in effect, use the
+    # first user-declared sweep model instead.  Sweep models are already
+    # canonical OpenRouter model IDs and, unlike the default, are explicitly
+    # available in this experiment configuration.  An explicit
+    # OPENROUTER_EXPERT_MODEL always wins.
+    activate_parent_package()
+    from llm_security.config import DEFAULT_EXPERT_MODEL
+
+    if (
+        config.model.expert_model == DEFAULT_EXPERT_MODEL
+        and config.model.sweep_models
+    ):
+        return [config.model.sweep_models[0]]
     return [config.model.expert_model]
 
 
@@ -113,7 +129,7 @@ def collect_outcome_matrix(
 
     destination = require_within(outcome_path, EVALUATION_ROOT)
     ledger = require_within(ledger_path, EVALUATION_ROOT)
-    config = app_config(env_file)
+    config = evaluation_api_config(env_file)
     if not config.model.api_key:
         raise RuntimeError(
             "OPENROUTER_API_KEY is missing. Add only that key to the project .env."

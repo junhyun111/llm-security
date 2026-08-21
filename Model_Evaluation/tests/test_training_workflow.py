@@ -10,6 +10,7 @@ from model_evaluation.candidates import StreamingCachedCandidateAnalyzer
 from model_evaluation.paths import EVALUATION_ROOT
 from model_evaluation.workflow import audit_outcome_matrix
 from model_evaluation.workflow import collect_outcome_matrix
+from model_evaluation.workflow import resolve_models
 from model_evaluation.adapters.llm_security import activate_parent_package
 
 
@@ -51,6 +52,16 @@ def test_budget_stops_before_request_or_reserved_overspend() -> None:
     budget.validate()
     with pytest.raises(BudgetExceeded):
         budget.check()
+
+
+def test_default_evaluation_model_uses_declared_sweep_model(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "OPENROUTER_API_KEY=test-only\n"
+        "OPENROUTER_SWEEP_MODELS=deepseek/deepseek-v4-flash-0731\n",
+        encoding="utf-8",
+    )
+    assert resolve_models(env_file) == ["deepseek/deepseek-v4-flash-0731"]
     budget = ApiBudget(max_requests=1, max_usd=1.0, reserve_usd_per_request=0.10)
     budget.validate()
     budget.requests = 1

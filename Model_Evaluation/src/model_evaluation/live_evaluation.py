@@ -5,8 +5,8 @@ from typing import Callable, Iterable
 
 from .adapters.llm_security import (
     activate_parent_package,
-    app_config,
     candidate_from_dict,
+    evaluation_api_config,
     load_cases,
 )
 from .api_budget import LoggedLLMClient
@@ -557,8 +557,13 @@ def _remap_diff(diff: str, path_map: dict[str, str]) -> str:
 
 
 def _api_config(env_file: str | Path):
-    config = app_config(env_file)
+    config = evaluation_api_config(env_file)
     if not config.model.api_key:
         raise RuntimeError("OPENROUTER_API_KEY is missing from .env")
+    # Keep live detection on the same endpoint-compatible model used to train
+    # the router when OPENROUTER_EXPERT_MODEL was not explicitly set.
+    from .workflow import resolve_models
+
+    config.model.expert_model = resolve_models(env_file)[0]
     config.model.max_output_tokens = max(config.model.max_output_tokens, 8_192)
     return config
