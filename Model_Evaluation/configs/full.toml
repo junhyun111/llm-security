@@ -1,0 +1,23 @@
+schema_version = "juliet-eval-v1"
+dataset_root = 'D:\llm-data'
+seed = 2026
+pilot_per_expert = 20
+max_packages = 0
+parse_timeout_ms = 30000
+max_source_bytes = 0
+index_batch_size = 500
+
+[splits]
+train = 0.70
+dev = 0.15
+test = 0.15
+
+[paths]
+mapping = "configs/cwe_expert_mapping.toml"
+index = "work/index/juliet.sqlite"
+index_summary = "work/index/index_summary.json"
+split_manifest = "work/frozen/split_manifest.json"
+pilot_directory = "work/pilot"
+candidate_directory = "work/candidates"
+analyzer_report = "results/analyzer_metrics.json"
+
