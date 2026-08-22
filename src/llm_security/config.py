@@ -7,26 +7,22 @@ from pathlib import Path
 from .models import ExpertFamily
 
 
-DEFAULT_EXPERT_MODEL = "openai/gpt-5.4-mini"
-DEFAULT_VALIDATOR_MODEL = "anthropic/claude-sonnet-4.5"
-DEFAULT_PATCH_MODEL = "moonshotai/kimi-k2.7-code"
-DEFAULT_STRONG_MODEL = "openai/gpt-5.4"
-
-
 @dataclass(slots=True)
 class ModelConfig:
     api_key: str | None = None
-    expert_model: str = DEFAULT_EXPERT_MODEL
+    expert_model: str = ""
     expert_models: dict[ExpertFamily, str] = field(default_factory=dict)
-    validator_model: str = DEFAULT_VALIDATOR_MODEL
-    patch_model: str = DEFAULT_PATCH_MODEL
-    strong_model: str | None = DEFAULT_STRONG_MODEL
+    validator_model: str = ""
+    patch_model: str = ""
+    strong_model: str | None = None
     sweep_models: tuple[str, ...] = ()
-    temperature: float = 0.0
+    temperature: float | None = None
     max_output_tokens: int = 2500
     reasoning_enabled: bool | None = None
     reasoning_effort: str | None = "medium"
     provider: str | None = None
+    require_parameters: bool = True
+    allow_fallbacks: bool = False
     structured_output: bool = True
 
 
@@ -89,11 +85,9 @@ class AppConfig:
             for item in values.get("OPENROUTER_SWEEP_MODELS", "").split(",")
             if item.strip()
         )
-        default_expert_model = values.get(
-            "OPENROUTER_EXPERT_MODEL", DEFAULT_EXPERT_MODEL
-        )
+        default_expert_model = _required(values, "OPENROUTER_EXPERT_MODEL")
         expert_models = {
-            family: values.get(env_name, default_expert_model)
+            family: _optional(values.get(env_name)) or default_expert_model
             for family, env_name in _EXPERT_MODEL_ENV.items()
         }
         config = cls(
@@ -101,15 +95,13 @@ class AppConfig:
                 api_key=_optional(values.get("OPENROUTER_API_KEY")),
                 expert_model=default_expert_model,
                 expert_models=expert_models,
-                validator_model=values.get(
-                    "OPENROUTER_VALIDATOR_MODEL", DEFAULT_VALIDATOR_MODEL
-                ),
-                patch_model=values.get("OPENROUTER_PATCH_MODEL", DEFAULT_PATCH_MODEL),
-                strong_model=_optional(
-                    values.get("OPENROUTER_STRONG_MODEL", DEFAULT_STRONG_MODEL)
-                ),
+                validator_model=_required(values, "OPENROUTER_VALIDATOR_MODEL"),
+                patch_model=_required(values, "OPENROUTER_PATCH_MODEL"),
+                strong_model=_optional(values.get("OPENROUTER_STRONG_MODEL")),
                 sweep_models=sweep_models,
-                temperature=float(values.get("OPENROUTER_TEMPERATURE", "0")),
+                temperature=_as_optional_float(
+                    values.get("OPENROUTER_TEMPERATURE")
+                ),
                 max_output_tokens=int(values.get("OPENROUTER_MAX_OUTPUT_TOKENS", "2500")),
                 reasoning_enabled=_as_optional_bool(
                     values.get("OPENROUTER_REASONING_ENABLED")
@@ -118,6 +110,12 @@ class AppConfig:
                     values.get("OPENROUTER_REASONING_EFFORT", "medium")
                 ),
                 provider=_optional(values.get("OPENROUTER_PROVIDER")),
+                require_parameters=_as_bool(
+                    values.get("OPENROUTER_REQUIRE_PARAMETERS", "true")
+                ),
+                allow_fallbacks=_as_bool(
+                    values.get("OPENROUTER_ALLOW_FALLBACKS", "false")
+                ),
                 structured_output=_as_bool(
                     values.get("OPENROUTER_STRUCTURED_OUTPUT", "true")
                 ),
@@ -230,6 +228,18 @@ def _read_env_file(path: str | Path) -> dict[str, str]:
 
 def _optional(value: str | None) -> str | None:
     return value if value and value.strip() else None
+
+
+def _required(values: dict[str, str], key: str) -> str:
+    value = _optional(values.get(key))
+    if value is None:
+        raise ValueError(f"{key} must be set in .env or the process environment")
+    return value
+
+
+def _as_optional_float(value: str | None) -> float | None:
+    normalized = _optional(value)
+    return float(normalized) if normalized is not None else None
 
 
 def _as_bool(value: str) -> bool:

@@ -146,6 +146,9 @@ def test_factory_defaults_to_semantic_and_allows_legacy_opt_in() -> None:
 
     config = AppConfig()
     config.model.api_key = "test-key"
+    config.model.expert_model = "model/expert"
+    config.model.validator_model = "model/validator"
+    config.model.patch_model = "model/patch"
     semantic = build_pipeline(config, _Router())
     assert isinstance(semantic.analyzer, SemanticStaticAnalyzer)
 

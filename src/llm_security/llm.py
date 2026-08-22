@@ -36,11 +36,13 @@ class OpenRouterClient:
         api_key: str | None = None,
         timeout_seconds: float = 120.0,
         max_retries: int = 2,
-        temperature: float = 0.0,
+        temperature: float | None = None,
         max_output_tokens: int = 2500,
         reasoning_enabled: bool | None = None,
         reasoning_effort: str | None = None,
         provider: str | None = None,
+        require_parameters: bool = True,
+        allow_fallbacks: bool = False,
         structured_output: bool = True,
     ) -> None:
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
@@ -53,6 +55,8 @@ class OpenRouterClient:
         self.reasoning_enabled = reasoning_enabled
         self.reasoning_effort = reasoning_effort
         self.provider = provider
+        self.require_parameters = require_parameters
+        self.allow_fallbacks = allow_fallbacks
         self.structured_output = structured_output
         self.endpoint = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -78,10 +82,14 @@ class OpenRouterClient:
         body: dict[str, Any] = {
             "model": model,
             "messages": request_messages,
-            "temperature": self.temperature,
             "max_tokens": self.max_output_tokens,
-            "provider": {"require_parameters": True, "allow_fallbacks": False},
+            "provider": {
+                "require_parameters": self.require_parameters,
+                "allow_fallbacks": self.allow_fallbacks,
+            },
         }
+        if self.temperature is not None:
+            body["temperature"] = self.temperature
         if self.structured_output:
             body["response_format"] = {
                 "type": "json_schema",
@@ -121,7 +129,27 @@ class OpenRouterClient:
                     raise RuntimeError(
                         f"Model mismatch: requested {model}, OpenRouter returned {actual_model}"
                     )
-                content = raw["choices"][0]["message"]["content"]
+                choice = raw["choices"][0]
+                message = choice["message"]
+                content = message.get("content")
+                if content is None:
+                    usage_raw = raw.get("usage", {}) or {}
+                    details = usage_raw.get("completion_tokens_details", {}) or {}
+                    response_error = raw.get("error") or choice.get("error")
+                    raise RuntimeError(
+                        "Model returned no final content "
+                        f"(generation_id={raw.get('id', 'unknown')}, "
+                        f"provider={raw.get('provider', 'unknown')}, "
+                        f"finish_reason={choice.get('finish_reason', 'unknown')}, "
+                        "native_finish_reason="
+                        f"{choice.get('native_finish_reason', 'unknown')}, "
+                        "completion_tokens="
+                        f"{int(usage_raw.get('completion_tokens', 0) or 0)}, "
+                        "reasoning_tokens="
+                        f"{int(details.get('reasoning_tokens', 0) or 0)}, "
+                        f"provider_error={response_error or 'none'}). "
+                        "The provider completed the request without a usable answer."
+                    )
                 if isinstance(content, list):
                     content = "".join(
                         str(part.get("text", "")) if isinstance(part, dict) else str(part)
@@ -131,7 +159,7 @@ class OpenRouterClient:
                     try:
                         data = _decode_json_content(content)
                     except json.JSONDecodeError as error:
-                        finish_reason = raw["choices"][0].get("finish_reason", "unknown")
+                        finish_reason = choice.get("finish_reason", "unknown")
                         raise RuntimeError(
                             "Model returned incomplete or invalid JSON "
                             f"(finish_reason={finish_reason}, content_characters="

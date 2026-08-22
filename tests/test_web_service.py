@@ -259,6 +259,8 @@ def test_batch_patch_uses_one_call_and_applies_all_selected_findings(
     settings.env_file = tmp_path / ".env"
     settings.env_file.write_text(
         "OPENROUTER_API_KEY=test\n"
+        "OPENROUTER_EXPERT_MODEL=model/expert\n"
+        "OPENROUTER_VALIDATOR_MODEL=model/validator\n"
         "OPENROUTER_PATCH_MODEL=model/patch\n"
         "RUN_PAID_EXPERIMENTS=1\n",
         encoding="utf-8",
