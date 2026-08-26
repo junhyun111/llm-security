@@ -10,3 +10,7 @@ data/arvo/*
 data/phase2e/
 .web-data/
 *.egg-info/
+
+# Docker CLI local files
+/output/
+/test_input/
