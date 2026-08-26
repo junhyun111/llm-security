@@ -46,6 +46,7 @@ def cache_candidates(
     )
     failures: list[dict] = []
     case_count = candidate_count = 0
+    cases_with_candidates = ground_truth_count = ground_truth_hits = 0
     started = perf_counter()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
@@ -73,6 +74,12 @@ def cache_candidates(
                     sort_keys=True,
                 ) + "\n")
             candidate_count += len(candidates)
+            cases_with_candidates += int(bool(candidates))
+            ground_truth_count += len(case.ground_truth)
+            ground_truth_hits += sum(
+                any(_matches(candidate, truth) for candidate in candidates)
+                for truth in case.ground_truth
+            )
             if progress and (case_count == 1 or case_count % 100 == 0):
                 progress(
                     f"candidate cache: {case_count} cases / "
@@ -90,6 +97,13 @@ def cache_candidates(
         "candidate_cache": str(destination),
         "case_count": case_count,
         "candidate_count": candidate_count,
+        "cases_with_candidates": cases_with_candidates,
+        "zero_candidate_case_count": case_count - cases_with_candidates,
+        "ground_truth_count": ground_truth_count,
+        "ground_truth_candidate_hits": ground_truth_hits,
+        "candidate_recall": (
+            ground_truth_hits / ground_truth_count if ground_truth_count else 1.0
+        ),
         "analysis_failure_count": len(failures),
         "elapsed_seconds": perf_counter() - started,
         "feature_schema": "semantic-cwe-v2",

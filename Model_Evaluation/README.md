@@ -57,14 +57,13 @@ The first completed run is summarized in [INITIAL_RESULTS.md](INITIAL_RESULTS.md
 Two executable notebooks cover the API experiment stages while keeping all
 generated files inside `Model_Evaluation`:
 
-- `train.ipynb`: materialize frozen train/dev splits, cache candidates, show
-  physical request counts, collect resumable batched outcomes, audit matrix
-  completeness, train the Utility Router, fit the escalation gate, and calibrate
-  the recall-constrained threshold.
-- `evaluation.ipynb`: materialize the untouched test split, collect its matching
-  outcome matrix, compare Single/Fixed-2/Utility Top-2/Adaptive/Full-5, replay
-  stage-wise end-to-end metrics, and optionally run live detection and patch
-  verification.
+- `train.ipynb`: preserve the frozen splits, create deterministic stratified
+  Train 6,000 / Dev 1,500 cohorts, preserve every E6 case, prioritize CWE and
+  leakage-family diversity, collect resumable batched outcomes, and compare
+  Logistic Regression, Gradient Boosting, and a shared multi-task MLP Router.
+- `evaluation.ipynb`: evaluate all three Router variants on the complete frozen
+  Test split of 8,337 scenarios, report micro/per-Expert/macro metrics, and run
+  optional batched patch verification for ground-truth-matched findings.
 
 Open JupyterLab from `D:\llm-security`:
 
@@ -99,10 +98,26 @@ skips completed cases, consolidates their outcome rows, and continues from the
 first missing case. Router training and final test evaluation refuse partial or
 duplicate matrices.
 
-`TRAIN_CASE_LIMIT`, `DEV_CASE_LIMIT`, and `TEST_CASE_LIMIT` default to `0`, which
-means the complete frozen split. Set a positive value only for a cheaper smoke or
-ablation run; use a separately named run directory/artifact when reporting such
-results.
+Outcome collection uses an `asyncio.Semaphore` completion pool with
+`MAX_CONCURRENCY = 1000`. It does not wait for a fixed chunk to finish: whenever
+one request completes, the next waiting case starts immediately. Transient 429
+and 5xx/network failures use exponential backoff with deterministic jitter, and
+every successful case is checkpointed before the pool continues. A concurrency
+of 1,000 is intentionally aggressive; lower `MAX_CONCURRENCY` in either
+notebook if the OpenRouter account or selected provider has a smaller rate or
+connection limit.
+
+The cohort policy is frozen in `configs/cohort_15837.toml`:
+
+```text
+Train 6,000: E1 1,800 / E3 1,300 / E4 1,700 / E5 1,128 / E6 72 (all)
+Dev   1,500: E1   450 / E3   325 / E4   425 / E5   282 / E6 18 (all)
+Test  8,337: complete leakage-disjoint frozen test split
+```
+
+Sampling never consults analyzer candidates. It first covers every available
+CWE, then unseen leakage groups, then additional family variations. Every
+selection and its sampling weight is recorded in a deterministic manifest.
 
 ### What is measured
 
@@ -113,6 +128,9 @@ The saved reports include:
 - escalation recall, missed/unnecessary escalation rates, and Full-5 rate;
 - average logical Expert count, request accounting, tokens, cost, and latency;
 - Full-5 oracle retention versus the adaptive Router;
+- LR versus GBDT versus shared 128→64 multi-task MLP ablation;
+- Brier score and expected calibration error for Router probabilities;
+- nested 1k/2k/4k/6k learning curves with E6 preserved;
 - optional patch apply rate and compile/test-verified repair rate.
 
 Patch evaluation is disabled by default. Before enabling it, replace
@@ -124,12 +142,15 @@ counted as a verified repair. Patch application occurs only in a temporary copy;
 ## New experiment outputs
 
 ```text
-work/router_training/cases/       full or limited train/dev cases
-work/router_training/candidates/  frozen semantic candidates
-work/router_training/outcomes/    resumable batched Expert outcome matrices
-work/router_training/ledgers/     request/token/cost ledgers (no API key)
+work/cohort_15837/                 deterministic cohort manifests and audit
+work/router_training_stratified_7500/cases/
+work/router_training_stratified_7500/candidates/
+work/router_training_stratified_7500/outcomes/
+work/router_training_stratified_7500/ledgers/
 artifacts/juliet_utility_router.pkl
-results/router_training/training_report.json
-work/router_evaluation/           frozen test matrix and optional live results
-results/router_evaluation/policy_and_end_to_end.json
+artifacts/juliet_utility_router_{logistic_regression,gradient_boosting,multitask_mlp}.pkl
+results/router_training_stratified_7500/training_report.json
+results/router_training_stratified_7500/learning_curves.json
+work/router_evaluation_full_test/
+results/router_evaluation_full_test/evaluation_*.json
 ```

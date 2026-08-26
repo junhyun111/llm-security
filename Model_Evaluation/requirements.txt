@@ -1,5 +1,6 @@
 numpy>=1.26
 scikit-learn>=1.5
+torch>=2.8
 tree-sitter>=0.25,<0.26
 tree-sitter-c>=0.24,<0.25
 tree-sitter-cpp>=0.23,<0.24

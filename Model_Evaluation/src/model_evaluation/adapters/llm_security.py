@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 from ..paths import PROJECT_ROOT
 
@@ -75,7 +77,39 @@ def app_config(env_file: str | Path):
     activate_parent_package()
     from llm_security.config import AppConfig
 
-    return AppConfig.from_env(env_file)
+    values: dict[str, str] = {}
+    source = Path(env_file)
+    if source.is_file():
+        for raw_line in source.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip('"').strip("'")
+    values.update(os.environ)
+    sweep = next(
+        (
+            item.strip()
+            for item in values.get("OPENROUTER_SWEEP_MODELS", "").split(",")
+            if item.strip()
+        ),
+        None,
+    )
+    fallback = (
+        values.get("OPENROUTER_EXPERT_MODEL", "").strip()
+        or sweep
+        or "deepseek/deepseek-v4-flash-0731"
+    )
+    defaults = {
+        key: fallback
+        for key in (
+            "OPENROUTER_EXPERT_MODEL",
+            "OPENROUTER_VALIDATOR_MODEL",
+            "OPENROUTER_PATCH_MODEL",
+        )
+        if not values.get(key, "").strip()
+    }
+    with patch.dict(os.environ, defaults, clear=False):
+        return AppConfig.from_env(env_file)
 
 
 def evaluation_api_config(env_file: str | Path):

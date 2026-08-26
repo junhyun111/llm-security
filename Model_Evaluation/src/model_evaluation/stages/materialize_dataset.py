@@ -13,6 +13,7 @@ from ..juliet.indexer import iter_scenarios
 from ..juliet.splitter import SPLITS
 from ..paths import EVALUATION_ROOT, require_within, write_json
 from ..schemas import IndexedScenario
+from .select_cohort import manifest_case_ids
 
 
 def materialize_dataset(
@@ -22,6 +23,7 @@ def materialize_dataset(
     output_directory: str | Path,
     splits: Iterable[str] = SPLITS,
     limits: dict[str, int] | None = None,
+    selection_manifests: dict[str, str | Path] | None = None,
     reuse_existing: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
@@ -38,6 +40,23 @@ def materialize_dataset(
     if unknown:
         raise ValueError("Unknown splits: " + ", ".join(unknown))
     caps = {split: max(0, int((limits or {}).get(split, 0))) for split in requested}
+    manifests = {
+        split: Path((selection_manifests or {}).get(split, "")).resolve()
+        if (selection_manifests or {}).get(split)
+        else None
+        for split in requested
+    }
+    for split, manifest in manifests.items():
+        if manifest is not None:
+            if not manifest.is_file():
+                raise ValueError(f"Selection manifest does not exist: {manifest}")
+            caps[split] = len(manifest_case_ids(manifest))
+    manifest_hashes = {
+        split: hashlib.sha256(manifest.read_bytes()).hexdigest()
+        if manifest is not None
+        else None
+        for split, manifest in manifests.items()
+    }
     summary_path = destination / "materialization_summary.json"
     if reuse_existing and summary_path.is_file():
         existing = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -49,6 +68,10 @@ def materialize_dataset(
             and all(
                 split in existing_splits
                 and int(existing_splits[split].get("requested_limit", -1)) == caps[split]
+                and existing_splits[split].get("selection_manifest")
+                == (str(manifests[split]) if manifests[split] else None)
+                and existing_splits[split].get("selection_manifest_sha256")
+                == manifest_hashes[split]
                 and Path(existing_splits[split].get("cases", "")).is_file()
                 for split in requested
             )
@@ -68,7 +91,19 @@ def materialize_dataset(
     for split in requested:
         ordered = _balanced_order(scenarios_by_split[split], config.seed, split)
         cap = caps[split]
-        selected = ordered if cap == 0 else ordered[:cap]
+        manifest = manifests[split]
+        if manifest is not None:
+            by_id = {item.case_id: item for item in ordered}
+            requested_ids = manifest_case_ids(manifest)
+            missing = [case_id for case_id in requested_ids if case_id not in by_id]
+            if missing:
+                raise ValueError(
+                    f"Selection manifest contains unknown {split} cases: {missing[:5]}"
+                )
+            selected = [by_id[case_id] for case_id in requested_ids]
+            cap = len(selected)
+        else:
+            selected = ordered if cap == 0 else ordered[:cap]
         failures: list[dict] = []
         expert_distribution: Counter[str] = Counter()
         cwe_distribution: Counter[str] = Counter()
@@ -109,6 +144,8 @@ def materialize_dataset(
         split_summary = {
             "available_indexed_cases": len(ordered),
             "requested_limit": cap,
+            "selection_manifest": str(manifest) if manifest else None,
+            "selection_manifest_sha256": manifest_hashes[split],
             "attempted_cases": len(selected),
             "materialized_cases": materialized_count,
             "failure_count": len(failures),

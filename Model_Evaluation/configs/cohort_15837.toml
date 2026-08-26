@@ -1,0 +1,22 @@
+schema_version = "juliet-cohort-v1"
+seed = 2026
+
+[train]
+mode = "quota"
+memory_bounds = 1800
+integer_size_type = 1300
+taint_api_contract = 1700
+control_state_error = 1128
+concurrency_toctou = 72
+
+[dev]
+mode = "quota"
+memory_bounds = 450
+integer_size_type = 325
+taint_api_contract = 425
+control_state_error = 282
+concurrency_toctou = 18
+
+[test]
+mode = "all"
+
