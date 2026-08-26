@@ -10,3 +10,8 @@ data/arvo/*
 data/phase2e/
 .web-data/
 *.egg-info/
+
+data/backend/
+backend/LlmSecurity.Api/data/
+frontend/node_modules/
+frontend/dist/

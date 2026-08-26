@@ -1,0 +1,5 @@
+# 아래 항목이 기존 .gitignore에 없다면 추가 권장
+data/backend/
+backend/LlmSecurity.Api/data/
+frontend/node_modules/
+frontend/dist/
