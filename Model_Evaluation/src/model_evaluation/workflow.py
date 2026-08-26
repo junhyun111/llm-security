@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -522,11 +523,7 @@ def train_utility_router(
     report_path: str | Path,
     model_ids: Iterable[str],
     train_cohort_manifest: str | Path | None = None,
-    backends: Iterable[str] = (
-        "logistic_regression",
-        "gradient_boosting",
-        "multitask_mlp",
-    ),
+    backends: Iterable[str] = ("multitask_mlp",),
     seed: int = 2026,
     target_truth_recall: float = 0.95,
     gate_fraction: float = 0.5,
@@ -534,11 +531,17 @@ def train_utility_router(
     cost_weight: float = 1.0,
     false_positive_weight: float = 0.5,
     unsupported_weight: float = 0.25,
+    mlp_device: str = "auto",
+    mlp_batch_size: int = 512,
+    mlp_max_epochs: int = 100,
+    mlp_patience: int = 12,
+    mlp_learning_rate: float = 2e-3,
+    mlp_weight_decay: float = 1e-4,
+    progress: Callable[[str], None] | None = print,
 ) -> dict[str, object]:
     activate_parent_package()
     from llm_security.models import to_dict
     from llm_security.routing import (
-        BudgetedUtilityRouter,
         UtilityPolicyConfig,
         assert_project_disjoint,
         split_gate_calibration_samples,
@@ -588,14 +591,29 @@ def train_utility_router(
     variant_reports: dict[str, dict[str, object]] = {}
     trained_routers = {}
     for backend in requested_backends:
+        if progress is not None:
+            progress(f"Router backend training: {backend}")
         router = _fit_router_backend(
             train_rows,
             backend=backend,
             policy=policy,
             seed=seed,
             case_weights=case_weights,
+            mlp_device=mlp_device,
+            mlp_batch_size=mlp_batch_size,
+            mlp_max_epochs=mlp_max_epochs,
+            mlp_patience=mlp_patience,
+            mlp_learning_rate=mlp_learning_rate,
+            mlp_weight_decay=mlp_weight_decay,
+            progress=progress,
         )
+        if progress is not None:
+            progress(
+                f"{backend} complete; fitting the existing escalation gate on Dev."
+            )
         gate_count = router.fit_escalation_gate(gate_rows, seed=seed)
+        if progress is not None:
+            progress("Escalation gate complete; calibrating the routing threshold.")
         calibration = router.calibrate_threshold(
             calibration_rows, target_truth_recall=target_truth_recall
         )
@@ -624,6 +642,14 @@ def train_utility_router(
         "artifact": str(artifact),
         "selected_backend": selected_backend,
         "models": models,
+        "mlp_device_preference": mlp_device,
+        "mlp_hyperparameters": {
+            "batch_size": mlp_batch_size,
+            "max_epochs": mlp_max_epochs,
+            "patience": mlp_patience,
+            "learning_rate": mlp_learning_rate,
+            "weight_decay": mlp_weight_decay,
+        },
         "train_matrix_audit": train_audit,
         "dev_matrix_audit": dev_audit,
         "selection_rule": (
@@ -642,16 +668,21 @@ def _fit_router_backend(
     policy,
     seed: int,
     case_weights: dict[str, float],
+    mlp_device: str = "auto",
+    mlp_batch_size: int = 512,
+    mlp_max_epochs: int = 100,
+    mlp_patience: int = 12,
+    mlp_learning_rate: float = 2e-3,
+    mlp_weight_decay: float = 1e-4,
+    progress: Callable[[str], None] | None = print,
 ):
     activate_parent_package()
     from llm_security.routing import BudgetedUtilityRouter
 
-    # Reuse the production constructor for label/schema/matrix validation and
-    # assignment statistics, then swap only the success-probability estimator.
-    router = BudgetedUtilityRouter.fit(
-        rows, policy=copy.deepcopy(policy), seed=seed
-    )
     if backend == "logistic_regression":
+        router = BudgetedUtilityRouter.fit(
+            rows, policy=copy.deepcopy(policy), seed=seed
+        )
         router.model.training_summary = {
             "backend": backend,
             "outcome_count": len(rows),
@@ -665,17 +696,137 @@ def _fit_router_backend(
         MultiTaskMLPUtilityRoutingModel,
     )
 
+    # Build nonlinear backends directly. The previous implementation called
+    # BudgetedUtilityRouter.fit first, which silently trained five LR heads
+    # before replacing them with the requested MLP/GBDT model.
+    materialized, assignments, statistics, feature_schema = (
+        _router_training_metadata(rows)
+    )
     if backend == "gradient_boosting":
-        router.model = GradientBoostedUtilityRoutingModel(seed=seed).fit(
-            [row.candidate.features for row in rows],
-            [row.assignment.assignment_id for row in rows],
-            [row.success for row in rows],
+        model = GradientBoostedUtilityRoutingModel(seed=seed).fit(
+            [row.candidate.features for row in materialized],
+            [row.assignment.assignment_id for row in materialized],
+            [row.success for row in materialized],
         )
     elif backend == "multitask_mlp":
-        router.model = MultiTaskMLPUtilityRoutingModel(seed=seed).fit_samples(
-            rows, case_weights=case_weights
+        model = MultiTaskMLPUtilityRoutingModel(
+            seed=seed,
+            device=mlp_device,
+            batch_size=mlp_batch_size,
+            max_epochs=mlp_max_epochs,
+            patience=mlp_patience,
+            learning_rate=mlp_learning_rate,
+            weight_decay=mlp_weight_decay,
+        ).fit_samples(
+            materialized, case_weights=case_weights, progress=progress
         )
+    else:  # pragma: no cover - validated by train_utility_router
+        raise ValueError(f"Unsupported Router backend: {backend}")
+    router = BudgetedUtilityRouter(
+        model,
+        assignments,
+        statistics,
+        policy=copy.deepcopy(policy),
+        feature_schema_version=feature_schema,
+    )
+    router.training_project_ids = {
+        sample.candidate.project_id for sample in materialized
+    }
     return router
+
+
+def _router_training_metadata(rows: list):
+    """Validate outcomes and derive Router metadata without fitting an LR model."""
+    activate_parent_package()
+    from llm_security.datasets import UTILITY_OUTCOME_LABEL_VERSION
+    from llm_security.models import ACTIVE_UTILITY_EXPERTS
+    from llm_security.routing import AssignmentStatistics, BudgetedUtilityRouter
+
+    materialized = [
+        sample
+        for sample in rows
+        if sample.assignment.expert in ACTIVE_UTILITY_EXPERTS
+    ]
+    if not materialized:
+        raise ValueError("Utility Router training requires five-Expert outcome samples")
+    invalid_labels = [
+        sample
+        for sample in materialized
+        if not sample.truth_labels_available
+        or sample.label_version != UTILITY_OUTCOME_LABEL_VERSION
+        or not sample.case_id
+    ]
+    if invalid_labels:
+        raise ValueError(
+            "Utility Router requires semantic outcome labels with case IDs. "
+            f"Expected label_version={UTILITY_OUTCOME_LABEL_VERSION}; "
+            "recollect legacy outcomes before training."
+        )
+    schemas = {
+        sample.candidate.feature_schema_version for sample in materialized
+    }
+    if len(schemas) != 1:
+        raise ValueError(
+            "Utility samples must use exactly one feature schema; got: "
+            + ", ".join(sorted(schemas))
+        )
+    if schemas != {BudgetedUtilityRouter.required_feature_schema_version}:
+        raise ValueError(
+            "Utility Router v4 requires static CWE hypothesis features with "
+            f"schema={BudgetedUtilityRouter.required_feature_schema_version}; "
+            "regenerate semantic candidates and recollect outcomes."
+        )
+    assignments = {
+        sample.assignment.assignment_id: sample.assignment
+        for sample in materialized
+    }
+    present = {assignment.expert for assignment in assignments.values()}
+    missing = set(ACTIVE_UTILITY_EXPERTS) - present
+    if missing:
+        raise ValueError(
+            "Utility outcomes are missing active Experts: "
+            + ", ".join(sorted(family.value for family in missing))
+        )
+
+    expected = set(assignments)
+    matrix_groups: dict[tuple[str, str], list] = defaultdict(list)
+    for sample in materialized:
+        matrix_groups[(sample.case_id, sample.candidate.candidate_id)].append(sample)
+    for key, group in matrix_groups.items():
+        assignment_ids = [item.assignment.assignment_id for item in group]
+        if len(assignment_ids) != len(set(assignment_ids)):
+            raise ValueError(f"Duplicate assignment outcome in candidate group {key}")
+        present_ids = set(assignment_ids)
+        if present_ids != expected:
+            raise ValueError(
+                f"Incomplete utility outcome matrix for candidate group {key}: "
+                f"missing={sorted(expected - present_ids)}; "
+                f"unexpected={sorted(present_ids - expected)}"
+            )
+
+    grouped: dict[str, list] = defaultdict(list)
+    for sample in materialized:
+        grouped[sample.assignment.assignment_id].append(sample)
+    statistics = {}
+    for assignment_id, samples in grouped.items():
+        count = len(samples)
+        statistics[assignment_id] = AssignmentStatistics(
+            samples=count,
+            success_rate=sum(item.success for item in samples) / count,
+            false_positive_rate=sum(item.false_positive for item in samples) / count,
+            unsupported_claim_rate=sum(
+                item.unsupported_claims > 0 for item in samples
+            ) / count,
+            average_cost=sum(item.cost for item in samples) / count,
+            average_prompt_tokens=sum(item.prompt_tokens for item in samples) / count,
+            average_completion_tokens=sum(
+                item.completion_tokens for item in samples
+            ) / count,
+            average_latency_seconds=sum(
+                item.latency_seconds for item in samples
+            ) / count,
+        )
+    return materialized, assignments, statistics, next(iter(schemas))
 
 
 def _load_case_weights(path: str | Path | None) -> dict[str, float]:
@@ -709,14 +860,17 @@ def train_router_learning_curves(
     train_cohort_manifest: str | Path,
     report_path: str | Path,
     sizes: Iterable[int] = (1_000, 2_000, 4_000, 6_000),
-    backends: Iterable[str] = (
-        "logistic_regression",
-        "gradient_boosting",
-        "multitask_mlp",
-    ),
+    backends: Iterable[str] = ("multitask_mlp",),
     seed: int = 2026,
     target_truth_recall: float = 0.95,
     gate_fraction: float = 0.5,
+    mlp_device: str = "auto",
+    mlp_batch_size: int = 512,
+    mlp_max_epochs: int = 100,
+    mlp_patience: int = 12,
+    mlp_learning_rate: float = 2e-3,
+    mlp_weight_decay: float = 1e-4,
+    progress: Callable[[str], None] | None = print,
 ) -> dict[str, object]:
     """Compare nested cohort prefixes without making additional API calls."""
     activate_parent_package()
@@ -767,6 +921,13 @@ def train_router_learning_curves(
                     policy=policy,
                     seed=seed,
                     case_weights=case_weights,
+                    mlp_device=mlp_device,
+                    mlp_batch_size=mlp_batch_size,
+                    mlp_max_epochs=mlp_max_epochs,
+                    mlp_patience=mlp_patience,
+                    mlp_learning_rate=mlp_learning_rate,
+                    mlp_weight_decay=mlp_weight_decay,
+                    progress=progress,
                 )
                 router.fit_escalation_gate(gate_rows, seed=seed)
                 calibration = router.calibrate_threshold(

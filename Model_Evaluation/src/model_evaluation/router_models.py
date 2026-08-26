@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import time
 from collections import defaultdict
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -12,11 +13,9 @@ from sklearn.feature_extraction import DictVectorizer
 try:
     import torch
     from torch import nn
-    from torch.utils.data import DataLoader, TensorDataset
 except ImportError:  # pragma: no cover - exercised by the friendly runtime error
     torch = None
     nn = None
-    DataLoader = TensorDataset = None
 
 
 class GradientBoostedUtilityRoutingModel:
@@ -121,11 +120,15 @@ class MultiTaskMLPUtilityRoutingModel:
         self,
         *,
         seed: int = 2026,
-        batch_size: int = 128,
-        max_epochs: int = 300,
-        patience: int = 30,
-        learning_rate: float = 1e-3,
+        batch_size: int = 512,
+        max_epochs: int = 100,
+        patience: int = 12,
+        learning_rate: float = 2e-3,
         weight_decay: float = 1e-4,
+        scheduler_patience: int = 4,
+        scheduler_factor: float = 0.5,
+        minimum_learning_rate: float = 1e-5,
+        device: str = "auto",
     ) -> None:
         self.seed = seed
         self.batch_size = batch_size
@@ -133,6 +136,11 @@ class MultiTaskMLPUtilityRoutingModel:
         self.patience = patience
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
+        self.scheduler_patience = scheduler_patience
+        self.scheduler_factor = scheduler_factor
+        self.minimum_learning_rate = minimum_learning_rate
+        self.device_preference = device
+        self.training_device = "cpu"
         self.vectorizer = DictVectorizer(sparse=False, dtype=np.float32)
         self.feature_mean: np.ndarray | None = None
         self.feature_scale: np.ndarray | None = None
@@ -151,6 +159,7 @@ class MultiTaskMLPUtilityRoutingModel:
         samples: Iterable,
         *,
         case_weights: dict[str, float] | None = None,
+        progress: Callable[[str], None] | None = print,
     ) -> "MultiTaskMLPUtilityRoutingModel":
         if torch is None:
             raise RuntimeError(
@@ -215,9 +224,13 @@ class MultiTaskMLPUtilityRoutingModel:
             [item[2] for item in records], self.seed
         )
 
+        device = _resolve_torch_device(self.device_preference)
+        self.training_device = str(device)
         torch.manual_seed(self.seed)
+        if device.type == "cuda":
+            torch.cuda.manual_seed_all(self.seed)
         np.random.seed(self.seed)
-        self.network = _SharedExpertMLP(matrix.shape[1], labels.shape[1])
+        self.network = _SharedExpertMLP(matrix.shape[1], labels.shape[1]).to(device)
         positive = labels[train_indices].sum(axis=0)
         negative = len(train_indices) - positive
         pos_weight = np.divide(
@@ -237,48 +250,67 @@ class MultiTaskMLPUtilityRoutingModel:
         if not active.any():
             raise ValueError("Every MLP output head is constant")
 
-        dataset = TensorDataset(
-            torch.from_numpy(matrix[train_indices]),
-            torch.from_numpy(labels[train_indices]),
-            torch.from_numpy(weights[train_indices]),
-        )
-        generator = torch.Generator().manual_seed(self.seed)
-        loader = DataLoader(
-            dataset,
-            batch_size=min(self.batch_size, len(dataset)),
-            shuffle=True,
-            generator=generator,
-        )
+        # This cohort is small enough to stay resident on a 12 GB GPU. Moving
+        # it once avoids a CPU-to-GPU copy for every mini-batch and epoch.
+        train_x = torch.from_numpy(matrix[train_indices]).to(device)
+        train_y = torch.from_numpy(labels[train_indices]).to(device)
+        train_w = torch.from_numpy(weights[train_indices]).to(device)
         optimizer = torch.optim.AdamW(
             self.network.parameters(),
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
         )
-        criterion = nn.BCEWithLogitsLoss(
-            reduction="none", pos_weight=torch.from_numpy(pos_weight)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=self.scheduler_factor,
+            patience=self.scheduler_patience,
+            min_lr=self.minimum_learning_rate,
         )
-        active_tensor = torch.from_numpy(active)
-        validation_x = torch.from_numpy(matrix[validation_indices])
-        validation_y = torch.from_numpy(labels[validation_indices])
-        validation_w = torch.from_numpy(weights[validation_indices])
+        criterion = nn.BCEWithLogitsLoss(
+            reduction="none", pos_weight=torch.from_numpy(pos_weight).to(device)
+        )
+        active_tensor = torch.from_numpy(active).to(device)
+        validation_x = torch.from_numpy(matrix[validation_indices]).to(device)
+        validation_y = torch.from_numpy(labels[validation_indices]).to(device)
+        validation_w = torch.from_numpy(weights[validation_indices]).to(device)
         best_state = None
         best_loss = float("inf")
         best_epoch = 0
         stale = 0
+        epochs_completed = 0
+        training_started = time.perf_counter()
+        if progress is not None:
+            progress(
+                "MLP training start | "
+                f"device={device} | train={len(train_indices)} | "
+                f"validation={len(validation_indices)} | "
+                f"batch_size={min(self.batch_size, len(train_indices))} | "
+                f"max_epochs={self.max_epochs} | initial_lr={self.learning_rate:.2e}"
+            )
         for epoch in range(1, self.max_epochs + 1):
             self.network.train()
-            for batch_x, batch_y, batch_weight in loader:
+            permutation = torch.randperm(len(train_indices), device=device)
+            train_loss_numerator = torch.zeros((), device=device)
+            train_loss_denominator = torch.zeros((), device=device)
+            for start in range(0, len(train_indices), self.batch_size):
+                indices = permutation[start : start + self.batch_size]
+                batch_x = train_x[indices]
+                batch_y = train_y[indices]
+                batch_weight = train_w[indices]
                 optimizer.zero_grad()
                 element_loss = criterion(self.network(batch_x), batch_y)
-                loss = (
-                    element_loss
-                    * active_tensor
-                    * batch_weight[:, None]
-                ).sum() / (
+                numerator = (
+                    element_loss * active_tensor * batch_weight[:, None]
+                ).sum()
+                denominator = (
                     active_tensor.sum() * batch_weight.sum().clamp_min(1e-8)
                 )
+                loss = numerator / denominator
                 loss.backward()
                 optimizer.step()
+                train_loss_numerator += numerator.detach()
+                train_loss_denominator += denominator.detach()
             self.network.eval()
             with torch.no_grad():
                 validation_loss = (
@@ -289,21 +321,46 @@ class MultiTaskMLPUtilityRoutingModel:
                     active_tensor.sum() * validation_w.sum().clamp_min(1e-8)
                 )
                 value = float(validation_loss.item())
-            if value < best_loss - 1e-6:
+                train_value = float(
+                    (train_loss_numerator / train_loss_denominator.clamp_min(1e-8)).item()
+                )
+            improved = value < best_loss - 1e-6
+            if improved:
                 best_loss = value
                 best_epoch = epoch
                 best_state = copy.deepcopy(self.network.state_dict())
                 stale = 0
             else:
                 stale += 1
-                if stale >= self.patience:
-                    break
+            scheduler.step(value)
+            current_lr = float(optimizer.param_groups[0]["lr"])
+            epochs_completed = epoch
+            if progress is not None:
+                progress(
+                    f"epoch {epoch:03d}/{self.max_epochs} | device={device} | "
+                    f"lr={current_lr:.2e} | train_loss={train_value:.6f} | "
+                    f"val_loss={value:.6f} | best_val={best_loss:.6f} "
+                    f"(epoch {best_epoch}) | stale={stale}/{self.patience} | "
+                    f"elapsed={time.perf_counter() - training_started:.1f}s"
+                )
+            if stale >= self.patience:
+                if progress is not None:
+                    progress(
+                        f"MLP early stopping at epoch {epoch}; "
+                        f"restoring epoch {best_epoch}."
+                    )
+                break
         if best_state is not None:
             self.network.load_state_dict(best_state)
         self.temperatures = self._fit_temperatures(validation_x, validation_y, active)
         self.network.eval()
+        # Keep the saved Router artifact portable: training uses CUDA when
+        # available, while inference can always deserialize this CPU state.
+        self.network.to("cpu")
         self.training_summary = {
             "backend": "multitask_mlp",
+            "training_device": self.training_device,
+            "artifact_device": "cpu",
             "architecture": [matrix.shape[1], 128, 64, labels.shape[1]],
             "feature_count": matrix.shape[1],
             "candidate_count": len(records),
@@ -322,7 +379,21 @@ class MultiTaskMLPUtilityRoutingModel:
                 for index, value in self.constant_probabilities.items()
             },
             "best_epoch": best_epoch,
+            "epochs_completed": epochs_completed,
             "best_validation_loss": best_loss,
+            "elapsed_seconds": time.perf_counter() - training_started,
+            "batch_size": min(self.batch_size, len(train_indices)),
+            "max_epochs": self.max_epochs,
+            "early_stopping_patience": self.patience,
+            "initial_learning_rate": self.learning_rate,
+            "final_learning_rate": float(optimizer.param_groups[0]["lr"]),
+            "weight_decay": self.weight_decay,
+            "lr_scheduler": {
+                "name": "ReduceLROnPlateau",
+                "factor": self.scheduler_factor,
+                "patience": self.scheduler_patience,
+                "minimum_learning_rate": self.minimum_learning_rate,
+            },
             "temperatures": {
                 assignment_id: float(self.temperatures[index])
                 for index, assignment_id in enumerate(self.assignment_ids)
@@ -354,7 +425,9 @@ class MultiTaskMLPUtilityRoutingModel:
         for index in range(labels.shape[1]):
             if not active[index] or len(torch.unique(labels[:, index])) < 2:
                 continue
-            log_temperature = torch.zeros(1, requires_grad=True)
+            log_temperature = torch.zeros(
+                1, device=logits.device, requires_grad=True
+            )
             optimizer = torch.optim.LBFGS(
                 [log_temperature], lr=0.1, max_iter=50, line_search_fn="strong_wolfe"
             )
@@ -374,6 +447,21 @@ class MultiTaskMLPUtilityRoutingModel:
                 log_temperature.detach().exp().clamp(0.05, 20.0).item()
             )
         return temperatures
+
+
+def _resolve_torch_device(preference: str):
+    if torch is None:  # pragma: no cover - guarded by fit_samples
+        raise RuntimeError("PyTorch is unavailable")
+    requested = preference.strip().lower()
+    if requested == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(requested)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA was requested for the multi-task MLP, but this PyTorch "
+            "environment has no available CUDA GPU."
+        )
+    return device
 
 
 def _project_holdout(project_ids: Sequence[str], seed: int) -> tuple[np.ndarray, np.ndarray]:
@@ -407,4 +495,3 @@ def _project_holdout(project_ids: Sequence[str], seed: int) -> tuple[np.ndarray,
     if not len(train) or not len(validation):
         raise ValueError("MLP needs at least two candidate groups for validation")
     return train, validation
-

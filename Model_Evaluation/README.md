@@ -128,10 +128,30 @@ The saved reports include:
 - escalation recall, missed/unnecessary escalation rates, and Full-5 rate;
 - average logical Expert count, request accounting, tokens, cost, and latency;
 - Full-5 oracle retention versus the adaptive Router;
-- LR versus GBDT versus shared 128→64 multi-task MLP ablation;
+- shared 128→64 multi-task MLP Router metrics;
+- MLP Router uses CUDA automatically when the installed PyTorch build detects a GPU;
 - Brier score and expected calibration error for Router probabilities;
-- nested 1k/2k/4k/6k learning curves with E6 preserved;
+- optional nested 1k/2k/4k/6k MLP learning curves with E6 preserved;
 - optional patch apply rate and compile/test-verified repair rate.
+
+### GPU MLP training
+
+The training notebook runs only the multi-task MLP; LR and GBDT are not fitted.
+It uses batch size 512, initial learning rate 0.002, at most 100 epochs, and
+early-stopping patience 12. `ReduceLROnPlateau` halves the learning rate after
+four stale validation epochs down to 0.00001. Every epoch prints the current
+learning rate, train/validation loss, best epoch, stale count, and elapsed time.
+
+The multi-task MLP selects CUDA automatically. For this Windows RTX 3060 environment
+install the CUDA-enabled PyTorch build into the selected virtual environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --upgrade --force-reinstall torch==2.13.0 --index-url https://download.pytorch.org/whl/test/cu126
+```
+
+Restart the notebook kernel afterwards. The setup cell must print `MLP training
+device: cuda`; `cpu (CUDA unavailable)` means that a CPU-only PyTorch build is
+still active.
 
 Patch evaluation is disabled by default. Before enabling it, replace
 `PATCH_VERIFICATION_COMMANDS` with commands that genuinely build and test a
@@ -148,7 +168,7 @@ work/router_training_stratified_7500/candidates/
 work/router_training_stratified_7500/outcomes/
 work/router_training_stratified_7500/ledgers/
 artifacts/juliet_utility_router.pkl
-artifacts/juliet_utility_router_{logistic_regression,gradient_boosting,multitask_mlp}.pkl
+artifacts/juliet_utility_router_multitask_mlp.pkl
 results/router_training_stratified_7500/training_report.json
 results/router_training_stratified_7500/learning_curves.json
 work/router_evaluation_full_test/
