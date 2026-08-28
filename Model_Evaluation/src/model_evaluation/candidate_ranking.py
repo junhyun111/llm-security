@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterable
@@ -77,6 +78,7 @@ def train_candidate_ranker_suite(
         )
         variants[backend] = {
             "artifact": str(artifact),
+            "artifact_sha256": _sha256(artifact),
             **metrics,
         }
         rankers[backend] = ranker
@@ -96,6 +98,7 @@ def train_candidate_ranker_suite(
         "selection_metric": f"dev_recall_at_{selection_k}",
         "selected_backend": selected_backend,
         "selected_artifact": str(selected_artifact),
+        "selected_artifact_sha256": _sha256(selected_artifact),
         "feature_schema": rankers[selected_backend].feature_schema_version,
         "seed": seed,
         "train": train_summary,
@@ -178,6 +181,7 @@ def rank_candidate_cache(
         "input_candidate_cache": str(Path(input_cache).resolve()),
         "candidate_cache": str(destination),
         "candidate_ranker_artifact": str(Path(artifact_path).resolve()),
+        "candidate_ranker_artifact_sha256": _sha256(artifact_path),
         "candidate_ranker_backend": ranker.backend,
         "feature_schema": ranker.feature_schema_version,
         "case_count": case_count,
@@ -232,3 +236,11 @@ def _matches(candidate, truth) -> bool:
         and candidate.line_start <= truth.line_end
         and candidate.line_end >= truth.line_start
     )
+
+
+def _sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

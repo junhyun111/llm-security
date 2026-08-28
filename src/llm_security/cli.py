@@ -9,7 +9,6 @@ from pathlib import Path
 from .arvo import prepare_arvo_cases, prepare_arvo_training_dataset
 from .benchmarks import prepare_juliet_dataset, merge_case_split_directories
 from .config import AppConfig
-from .analysis import SemanticStaticAnalyzer
 from .datasets import (
     load_cases_jsonl,
     iter_cases_jsonl,
@@ -28,7 +27,12 @@ from .experiments import (
     run_phase2e_jsonl,
     write_utility_tradeoff_report,
 )
-from .factory import build_context_builder, build_openrouter_client, build_pipeline
+from .factory import (
+    build_candidate_analyzer,
+    build_context_builder,
+    build_openrouter_client,
+    build_pipeline,
+)
 from .models import (
     ACTIVE_UTILITY_EXPERTS,
     ExpertAssignment,
@@ -458,9 +462,11 @@ def main(argv: list[str] | None = None) -> int:
         metrics = evaluate_utility_end_to_end(
             cases,
             outcome_rows,
-            analyzer=SemanticStaticAnalyzer(
+            analyzer=build_candidate_analyzer(
+                config,
                 max_source_bytes=_source_limit_bytes(args.max_source_mb),
                 parse_timeout_ms=_parse_timeout_ms(args.parse_timeout_seconds),
+                require_ranker=True,
             ),
             candidate_gate=CandidateGate(
                 enabled=gate_enabled,
@@ -525,7 +531,8 @@ def main(argv: list[str] | None = None) -> int:
         client = build_openrouter_client(config)
         summary = collect_expert_outcomes(
             cases,
-            analyzer=SemanticStaticAnalyzer(
+            analyzer=build_candidate_analyzer(
+                config,
                 max_source_bytes=_source_limit_bytes(args.max_source_mb),
                 parse_timeout_ms=_parse_timeout_ms(args.parse_timeout_seconds),
             ),

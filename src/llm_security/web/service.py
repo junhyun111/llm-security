@@ -60,7 +60,9 @@ class JobStatus(str, Enum):
 @dataclass(slots=True)
 class WebSettings:
     workspace_root: Path = Path(".web-data")
-    router_artifact: Path = Path("artifacts/phase2e/router_top2_full5_v4.pkl")
+    router_artifact: Path = Path(
+        "Model_Evaluation/artifacts/juliet_utility_router.pkl"
+    )
     max_upload_files: int = 10_000
     max_upload_bytes: int = 1024 * 1024 * 1024
     max_source_file_bytes: int = 5 * 1024 * 1024
@@ -79,9 +81,7 @@ class WebSettings:
         values.update(os.environ)
         artifact = values.get("WEB_ROUTER_ARTIFACT", "").strip()
         if not artifact:
-            utility = Path("artifacts/phase2e/router_top2_full5_v4.pkl")
-            anchor = Path("artifacts/phase2e/router_anchor_rare_v2.pkl")
-            artifact = str(utility if utility.exists() else anchor)
+            artifact = "Model_Evaluation/artifacts/juliet_utility_router.pkl"
         return cls(
             workspace_root=Path(values.get("WEB_WORKSPACE_ROOT", ".web-data")),
             router_artifact=Path(artifact),
@@ -593,6 +593,17 @@ class WebJobService:
         )
         return {
             "summary": {
+                "router_artifact": str(self.settings.router_artifact.resolve()),
+                "router_artifact_sha256": _file_sha256(
+                    self.settings.router_artifact
+                ),
+                "candidate_ranker_artifact": config.analysis.candidate_ranker_path,
+                "candidate_ranker_artifact_sha256": (
+                    _file_sha256(config.analysis.candidate_ranker_path)
+                    if config.analysis.candidate_ranker_path
+                    else None
+                ),
+                "max_candidates": config.analysis.max_candidates_per_project,
                 "source_file_count": len(source_files),
                 "candidate_count": len(result.candidates),
                 "cwe_hypothesis_count": sum(
@@ -723,6 +734,14 @@ def load_router_artifact(path: str | Path):
         except TypeError as error:
             errors.append(str(error))
     raise TypeError("Unsupported Router artifact: " + " | ".join(errors))
+
+
+def _file_sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def validate_patch_scope(unified_diff: str, expected_file: str) -> None:

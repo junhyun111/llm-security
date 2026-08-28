@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 
 from llm_security.analysis import LearnedCandidateRanker, SemanticStaticAnalyzer
+from llm_security.config import AppConfig
+from llm_security.factory import build_candidate_analyzer
 from llm_security.models import ProjectCase
 
 
@@ -46,3 +48,44 @@ def test_candidate_ranker_rejects_old_feature_schema() -> None:
 
     with pytest.raises(ValueError, match="semantic-cwe-v3"):
         ranker.score(candidates[0])
+
+
+def test_factory_loads_configured_candidate_ranker(tmp_path: Path) -> None:
+    candidates = _candidates()
+    labels = [candidate.function == "memory" for candidate in candidates]
+    artifact = LearnedCandidateRanker.fit(candidates, labels).save(
+        tmp_path / "candidate_ranker.pkl"
+    )
+    config = AppConfig()
+    config.model.expert_model = "model/expert"
+    config.model.validator_model = "model/validator"
+    config.model.patch_model = "model/patch"
+    config.analysis.candidate_ranker_path = str(artifact)
+    config.analysis.candidate_ranker_required = True
+
+    analyzer = build_candidate_analyzer(config)
+
+    assert analyzer.candidate_ranker is not None
+    assert analyzer.candidate_ranker.backend == "logistic_regression"
+
+
+def test_factory_fails_closed_when_configured_ranker_is_missing(tmp_path: Path) -> None:
+    config = AppConfig()
+    config.model.expert_model = "model/expert"
+    config.model.validator_model = "model/validator"
+    config.model.patch_model = "model/patch"
+    config.analysis.candidate_ranker_path = str(tmp_path / "missing.pkl")
+    config.analysis.candidate_ranker_required = True
+
+    with pytest.raises(ValueError, match="Cannot load configured Candidate Ranker"):
+        build_candidate_analyzer(config)
+
+
+def test_utility_path_requires_a_candidate_ranker() -> None:
+    config = AppConfig()
+    config.model.expert_model = "model/expert"
+    config.model.validator_model = "model/validator"
+    config.model.patch_model = "model/patch"
+
+    with pytest.raises(ValueError, match="Candidate Ranker artifact is required"):
+        build_candidate_analyzer(config, require_ranker=True)

@@ -45,15 +45,20 @@ class CandidateGateConfig:
 @dataclass(slots=True)
 class AnalysisConfig:
     backend: str = "semantic"
-    max_candidates_per_project: int = 50
+    max_candidates_per_project: int = 4
     context_lines: int = 25
     max_context_characters: int = 30_000
     security_knowledge_path: str | None = None
+    candidate_ranker_path: str | None = None
+    candidate_ranker_required: bool = False
 
 
 @dataclass(slots=True)
 class ValidationConfig:
     minimum_confidence: float = 0.60
+    minimum_confidence_by_expert: dict[ExpertFamily, float] = field(
+        default_factory=dict
+    )
     use_llm_for_uncertain: bool = True
     falsify_all_supported: bool = True
 
@@ -78,6 +83,7 @@ class AppConfig:
 
     @classmethod
     def from_env(cls, path: str | Path = ".env") -> "AppConfig":
+        env_path = Path(path).resolve()
         values = _read_env_file(path)
         values.update(os.environ)
         sweep_models = tuple(
@@ -140,15 +146,27 @@ class AppConfig:
             ),
             analysis=AnalysisConfig(
                 backend=values.get("ANALYSIS_BACKEND", "semantic").strip().lower(),
-                max_candidates_per_project=int(values.get("MAX_CANDIDATES", "50")),
+                max_candidates_per_project=int(values.get("MAX_CANDIDATES", "4")),
                 context_lines=int(values.get("CONTEXT_LINES", "25")),
                 max_context_characters=int(values.get("MAX_CONTEXT_CHARACTERS", "30000")),
                 security_knowledge_path=_optional(
                     values.get("SECURITY_KNOWLEDGE_PATH")
                 ),
+                candidate_ranker_path=_resolve_optional_path(
+                    values.get("CANDIDATE_RANKER_PATH"),
+                    base_directory=env_path.parent,
+                ),
+                candidate_ranker_required=_as_bool(
+                    values.get("CANDIDATE_RANKER_REQUIRED", "false")
+                ),
             ),
             validation=ValidationConfig(
                 minimum_confidence=float(values.get("MINIMUM_CONFIDENCE", "0.60")),
+                minimum_confidence_by_expert={
+                    expert: float(values[env_name])
+                    for expert, env_name in _VALIDATOR_CONFIDENCE_ENV.items()
+                    if _optional(values.get(env_name)) is not None
+                },
                 use_llm_for_uncertain=_as_bool(
                     values.get("USE_LLM_FOR_UNCERTAIN", "true")
                 ),
@@ -186,6 +204,24 @@ class AppConfig:
             raise ValueError("MAX_CANDIDATES must be positive")
         if self.analysis.backend not in {"legacy", "semantic"}:
             raise ValueError("ANALYSIS_BACKEND must be legacy or semantic")
+        if self.analysis.candidate_ranker_required and not self.analysis.candidate_ranker_path:
+            raise ValueError(
+                "CANDIDATE_RANKER_PATH is required when CANDIDATE_RANKER_REQUIRED=true"
+            )
+        if self.analysis.backend == "legacy" and (
+            self.analysis.candidate_ranker_path
+            or self.analysis.candidate_ranker_required
+        ):
+            raise ValueError("Candidate Ranker requires ANALYSIS_BACKEND=semantic")
+        if not 0.0 <= self.validation.minimum_confidence <= 1.0:
+            raise ValueError("MINIMUM_CONFIDENCE must be between 0 and 1")
+        if any(
+            not 0.0 <= value <= 1.0
+            for value in self.validation.minimum_confidence_by_expert.values()
+        ):
+            raise ValueError(
+                "Per-Expert minimum confidence values must be between 0 and 1"
+            )
         for model_id in (
             self.model.expert_model,
             self.model.validator_model,
@@ -205,6 +241,16 @@ _EXPERT_MODEL_ENV = {
     ExpertFamily.TAINT_API_CONTRACT: "OPENROUTER_TAINT_MODEL",
     ExpertFamily.CONTROL_STATE_ERROR: "OPENROUTER_CONTROL_MODEL",
     ExpertFamily.CONCURRENCY_TOCTOU: "OPENROUTER_CONCURRENCY_MODEL",
+}
+
+
+_VALIDATOR_CONFIDENCE_ENV = {
+    ExpertFamily.MEMORY_SAFETY: "MINIMUM_CONFIDENCE_MEMORY_BOUNDS",
+    ExpertFamily.LIFETIME_RESOURCE: "MINIMUM_CONFIDENCE_LIFETIME_RESOURCE",
+    ExpertFamily.INTEGER_SIZE_TYPE: "MINIMUM_CONFIDENCE_INTEGER_SIZE_TYPE",
+    ExpertFamily.TAINT_API_CONTRACT: "MINIMUM_CONFIDENCE_TAINT_API_CONTRACT",
+    ExpertFamily.CONTROL_STATE_ERROR: "MINIMUM_CONFIDENCE_CONTROL_STATE_ERROR",
+    ExpertFamily.CONCURRENCY_TOCTOU: "MINIMUM_CONFIDENCE_CONCURRENCY_TOCTOU",
 }
 
 
@@ -228,6 +274,18 @@ def _read_env_file(path: str | Path) -> dict[str, str]:
 
 def _optional(value: str | None) -> str | None:
     return value if value and value.strip() else None
+
+
+def _resolve_optional_path(
+    value: str | None, *, base_directory: Path
+) -> str | None:
+    normalized = _optional(value)
+    if normalized is None:
+        return None
+    path = Path(normalized).expanduser()
+    if not path.is_absolute():
+        path = base_directory / path
+    return str(path.resolve())
 
 
 def _required(values: dict[str, str], key: str) -> str:

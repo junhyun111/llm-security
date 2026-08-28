@@ -6,10 +6,14 @@ import uuid
 import pytest
 
 from model_evaluation.api_budget import ApiBudget, BudgetExceeded
-from model_evaluation.candidates import StreamingCachedCandidateAnalyzer
+from model_evaluation.candidates import (
+    StreamingCachedCandidateAnalyzer,
+    build_candidate_selection_manifest,
+)
 from model_evaluation.paths import EVALUATION_ROOT
 from model_evaluation.workflow import audit_outcome_matrix
 from model_evaluation.workflow import collect_outcome_matrix
+from model_evaluation.workflow import plan_outcome_matrix
 from model_evaluation.workflow import resolve_models
 from model_evaluation.adapters.llm_security import activate_parent_package
 from model_evaluation.diagnostics import (
@@ -347,20 +351,71 @@ def test_batched_collection_uses_one_request_per_case_and_resumes(
     )
     run_dir = EVALUATION_ROOT / "cache" / f"batched-collector-test-{uuid.uuid4().hex}"
     outcome = run_dir / "outcomes.jsonl"
+    selection = run_dir / "selection.jsonl"
+    build_candidate_selection_manifest(
+        cases,
+        candidate_cache,
+        selection,
+        selection_policy="training_matrix",
+        max_candidates_per_case=1,
+        hard_negatives_per_case=1,
+    )
     result = collect_outcome_matrix(
         env_file=env_file,
         cases_path=cases,
         candidate_cache=candidate_cache,
         outcome_path=outcome,
         ledger_path=run_dir / "ledger.jsonl",
+        selection_manifest=selection,
         model_ids=["example/model"],
+        selection_policy="training_matrix",
         max_candidates_per_case=1,
-        hard_negatives_per_case=1,
     )
     assert result["status"] == "complete"
     assert result["physical_requests_this_run"] == 1
     assert fake.calls == 1
     assert len(outcome.read_text(encoding="utf-8").splitlines()) == 5
+
+    planned = plan_outcome_matrix(
+        cases_path=cases,
+        candidate_cache=candidate_cache,
+        selection_manifest=selection,
+        outcome_path=outcome,
+        model_ids=["example/model"],
+        selection_policy="training_matrix",
+        max_candidates_per_case=1,
+        hard_negatives_per_case=1,
+    )
+    assert planned["remaining_physical_api_requests"] == 0
+
+    last_run_path = outcome.with_suffix(".last_run.json")
+    stale_last_run = json.loads(last_run_path.read_text(encoding="utf-8"))
+    stale_last_run["selection_policy"] = "deployment_top_k"
+    last_run_path.write_text(json.dumps(stale_last_run), encoding="utf-8")
+    stale_plan = plan_outcome_matrix(
+        cases_path=cases,
+        candidate_cache=candidate_cache,
+        selection_manifest=selection,
+        outcome_path=outcome,
+        model_ids=["example/model"],
+        selection_policy="training_matrix",
+        max_candidates_per_case=1,
+        hard_negatives_per_case=1,
+    )
+    assert stale_plan["completed_physical_api_requests"] == 0
+
+    stale_case_file = outcome.with_suffix(".cases") / "stale-case.json"
+    stale_case_file.write_text(
+        json.dumps(
+            {
+                "case_id": "stale-case",
+                "contract": {"version": "old"},
+                "rows": [{"invalid": "must not be consolidated"}],
+                "detection": {"case_id": "stale-case"},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     resumed = collect_outcome_matrix(
         env_file=env_file,
@@ -368,9 +423,10 @@ def test_batched_collection_uses_one_request_per_case_and_resumes(
         candidate_cache=candidate_cache,
         outcome_path=outcome,
         ledger_path=run_dir / "ledger.jsonl",
+        selection_manifest=selection,
         model_ids=["example/model"],
+        selection_policy="training_matrix",
         max_candidates_per_case=1,
-        hard_negatives_per_case=1,
     )
     assert resumed["physical_requests_this_run"] == 0
     assert fake.calls == 1

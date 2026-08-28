@@ -1,3 +1,8 @@
+"""Bounded direct caller/callee context augmentation.
+
+This module does not implement whole-program interprocedural data-flow analysis.
+"""
+
 from __future__ import annotations
 
 from ..models import RelatedFunctionSummary

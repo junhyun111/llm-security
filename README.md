@@ -63,9 +63,11 @@ C/C++ 프로젝트 업로드
         ↓
 정적 분석 (AST · CFG · Data Flow · CWE 가설)
         ↓
-Candidate Gate
+Learned Candidate Ranker
         ↓
-Anchor/Rare Router
+Candidate Gate · Top-4
+        ↓
+Utility Router · Top-2
   ├─ E1 Memory Safety
   ├─ E2 Lifetime / Resource
   ├─ E3 Integer / Size / Type
@@ -82,4 +84,4 @@ Anchor/Rare Router
 통합 patch 생성 · 적용 검증 · 수정 프로젝트 다운로드
 ```
 
-Router는 `artifacts/phase2e/router_anchor_rare_v2.pkl`을 사용합니다. E1과 E5는 기본 Anchor로 실행하고, 나머지 Expert는 코드 특징과 정적 CWE 근거 및 학습된 임계값에 따라 선택합니다. 취약점 탐지는 프로젝트당 통합 API 요청 1회, patch 생성은 사용자 승인 후 1회를 기본으로 합니다.
+웹 실행은 `Model_Evaluation/artifacts/candidate_ranker/candidate_ranker.pkl`과 `Model_Evaluation/artifacts/juliet_utility_router.pkl`을 함께 사용합니다. Candidate Ranker가 위험 후보 Top-4를 정하고 Utility Router가 각 후보를 검토할 Expert Top-2를 선택합니다. 현재 코드와 호환되지 않거나 누락된 artifact는 휴리스틱으로 대체하지 않고 실행을 중단합니다. 취약점 탐지는 프로젝트당 통합 API 요청 1회, patch 생성은 사용자 승인 후 1회를 기본으로 합니다.

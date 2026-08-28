@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -15,9 +16,9 @@ from .adapters.llm_security import (
 )
 from .api_budget import LoggedLLMClient
 from .candidates import (
+    CandidateSelectionManifest,
     StreamingCachedCandidateAnalyzer,
-    select_matrix_candidates,
-    selected_candidate_manifest,
+    build_candidate_selection_manifest,
 )
 from .concurrency import CompletionResult, run_completion_pool
 from .jsonl import append_jsonl, iter_jsonl, write_jsonl
@@ -38,10 +39,16 @@ def resolve_models(env_file: str | Path, models: Iterable[str] = ()) -> list[str
 
 
 def _outcome_case_contract(
-    model_id, assignments, candidates, validator_confidence_thresholds
+    model_id,
+    assignments,
+    candidates,
+    validator_confidence_thresholds,
+    *,
+    selection_policy: str,
+    selection_manifest_sha256: str,
 ) -> dict[str, object]:
     return {
-        "version": "batched-outcome-contract-v2",
+        "version": "batched-outcome-contract-v3",
         "model_id": model_id,
         "assignment_ids": sorted(item.assignment_id for item in assignments),
         "candidate_ids": sorted(item.candidate_id for item in candidates),
@@ -51,6 +58,8 @@ def _outcome_case_contract(
         "validator_confidence_thresholds": dict(
             sorted(validator_confidence_thresholds.items())
         ),
+        "selection_policy": selection_policy,
+        "selection_manifest_sha256": selection_manifest_sha256,
     }
 
 
@@ -74,15 +83,17 @@ def plan_outcome_matrix(
     selection_manifest: str | Path,
     outcome_path: str | Path,
     model_ids: Iterable[str],
+    selection_policy: str,
     max_candidates_per_case: int = 4,
     hard_negatives_per_case: int = 1,
 ) -> dict[str, object]:
     models = resolve_models_from_values(model_ids)
     assignments = expert_assignments(models)
-    selection = selected_candidate_manifest(
+    selection = build_candidate_selection_manifest(
         cases_path,
         candidate_cache,
         selection_manifest,
+        selection_policy=selection_policy,
         max_candidates_per_case=max_candidates_per_case,
         hard_negatives_per_case=hard_negatives_per_case,
     )
@@ -93,7 +104,27 @@ def plan_outcome_matrix(
     }
     completed_keys: set[tuple[str, str, str]] = set()
     output = Path(outcome_path)
-    if output.is_file():
+    last_run_path = output.with_suffix(".last_run.json")
+    existing_contract_matches = False
+    if last_run_path.is_file():
+        try:
+            previous = json.loads(last_run_path.read_text(encoding="utf-8"))
+            existing_contract_matches = all(
+                (
+                    previous.get("model") == models[0],
+                    previous.get("selection_policy") == selection_policy,
+                    previous.get("selection_manifest_sha256")
+                    == selection["selection_manifest_sha256"],
+                    previous.get("candidate_cache_sha256")
+                    == selection["candidate_cache_sha256"],
+                    previous.get("cases_sha256") == selection["cases_sha256"],
+                    previous.get("max_candidates_per_case")
+                    == max_candidates_per_case,
+                )
+            )
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            existing_contract_matches = False
+    if output.is_file() and existing_contract_matches:
         for sample in load_outcomes(output):
             completed_keys.add(
                 (sample.case_id, sample.candidate.candidate_id, sample.assignment.assignment_id)
@@ -129,9 +160,10 @@ def collect_outcome_matrix(
     candidate_cache: str | Path,
     outcome_path: str | Path,
     ledger_path: str | Path,
+    selection_manifest: str | Path,
     model_ids: Iterable[str],
+    selection_policy: str,
     max_candidates_per_case: int = 4,
-    hard_negatives_per_case: int = 1,
     max_batch_characters: int = 1_000_000,
     max_concurrency: int = 1_000,
     max_case_attempts: int = 6,
@@ -168,6 +200,13 @@ def collect_outcome_matrix(
     )
     case_directory.mkdir(parents=True, exist_ok=True)
     analyzer = StreamingCachedCandidateAnalyzer(candidate_cache)
+    selection = CandidateSelectionManifest(
+        selection_manifest,
+        expected_policy=selection_policy,
+        cases_path=cases_path,
+        candidate_cache=candidate_cache,
+        max_candidates_per_case=max_candidates_per_case,
+    )
     client = LoggedLLMClient(build_openrouter_client(config), ledger)
     runner = BatchedExpertRunner(
         client=client,
@@ -193,6 +232,7 @@ def collect_outcome_matrix(
     completed_cases = 0
     new_cases = 0
     work_items = []
+    expected_contracts: dict[str, dict[str, object]] = {}
 
     # The candidate cache is intentionally streaming and must be consumed in
     # case order. Candidate selection therefore stays single-threaded and is
@@ -200,15 +240,20 @@ def collect_outcome_matrix(
     for case in cases:
         candidates = analyzer.analyze(case)
         case_file = case_directory / f"{case.case_id}.json"
-        selected = select_matrix_candidates(
-            candidates,
-            case.ground_truth,
-            max_candidates=max_candidates_per_case,
-            hard_negatives=hard_negatives_per_case,
-        )
+        selected = selection.select(case.case_id, candidates)
+        if len(selected) > max_candidates_per_case:
+            raise ValueError(
+                f"Selection manifest exceeds max_candidates_per_case for {case.case_id}"
+            )
         contract = _outcome_case_contract(
-            model_id, assignments, selected, validator_thresholds
+            model_id,
+            assignments,
+            selected,
+            validator_thresholds,
+            selection_policy=selection_policy,
+            selection_manifest_sha256=selection.sha256,
         )
+        expected_contracts[case.case_id] = contract
         if _case_file_matches_contract(case_file, contract):
             completed_cases += 1
             continue
@@ -238,7 +283,7 @@ def collect_outcome_matrix(
                 selected=experts,
                 top1_confidence=1.0,
                 top1_top2_margin=0.0,
-                policy="batched_full5_training_matrix",
+                policy=f"batched_full5_{selection_policy}",
                 reasons=[
                     "all five logical Experts evaluated in one physical request"
                 ],
@@ -407,11 +452,21 @@ def collect_outcome_matrix(
     new_cases = counters["new"]
     status = "complete" if counters["failed"] == 0 else "partial_errors_resumable"
     stop_reason = failure_messages[0] if failure_messages else None
-    _consolidate_case_outcomes(case_directory, destination)
+    _consolidate_case_outcomes(
+        case_directory,
+        destination,
+        expected_contracts=expected_contracts,
+    )
     result = {
         "status": status,
         "stop_reason": stop_reason,
         "model": model_id,
+        "selection_policy": selection_policy,
+        "selection_manifest": str(selection.path),
+        "selection_manifest_sha256": selection.sha256,
+        "cases_sha256": selection.summary["cases_sha256"],
+        "candidate_cache_sha256": selection.summary["candidate_cache_sha256"],
+        "max_candidates_per_case": max_candidates_per_case,
         "cases_seen": cases_seen,
         "completed_cases": completed_cases,
         "new_cases": new_cases,
@@ -490,17 +545,27 @@ def _candidate_matches_truth(candidate, truth) -> bool:
     )
 
 
-def _consolidate_case_outcomes(case_directory: Path, destination: Path) -> None:
-    def rows():
+def _consolidate_case_outcomes(
+    case_directory: Path,
+    destination: Path,
+    *,
+    expected_contracts: dict[str, dict[str, object]],
+) -> None:
+    def current_payloads():
         for case_file in sorted(case_directory.glob("*.json")):
             payload = json.loads(case_file.read_text(encoding="utf-8"))
+            case_id = str(payload.get("case_id", ""))
+            if payload.get("contract") == expected_contracts.get(case_id):
+                yield payload
+
+    def rows():
+        for payload in current_payloads():
             yield from payload.get("rows", [])
 
     write_jsonl(destination, rows())
 
     def detections():
-        for case_file in sorted(case_directory.glob("*.json")):
-            payload = json.loads(case_file.read_text(encoding="utf-8"))
+        for payload in current_payloads():
             detection = payload.get("detection")
             if detection is not None:
                 yield detection
@@ -674,6 +739,7 @@ def train_utility_router(
         trained_routers[backend] = router
         variant_reports[backend] = {
             "artifact": str(variant_artifact),
+            "artifact_sha256": _file_sha256(variant_artifact),
             "gate_training_candidates": gate_count,
             "calibration": to_dict(calibration),
             "baseline_calibration": to_dict(baselines),
@@ -687,6 +753,7 @@ def train_utility_router(
     trained_routers[selected_backend].save(artifact)
     report = {
         "artifact": str(artifact),
+        "artifact_sha256": _file_sha256(artifact),
         "selected_backend": selected_backend,
         "models": models,
         "mlp_device_preference": mlp_device,
@@ -1020,6 +1087,13 @@ def evaluate_utility_router(
     from llm_security.models import to_dict
     from llm_security.routing import BudgetedUtilityRouter, CandidateGate
 
+    deployment_selection = CandidateSelectionManifest(
+        selection_manifest,
+        expected_policy="deployment_top_k",
+        cases_path=test_cases,
+        candidate_cache=candidate_cache,
+        max_candidates_per_case=max_candidates_per_case,
+    )
     router = BudgetedUtilityRouter.load(artifact_path)
     rows = load_outcomes(test_outcomes)
     router.assert_test_projects_unseen(rows)
@@ -1066,6 +1140,12 @@ def evaluate_utility_router(
     report = {
         "artifact": str(Path(artifact_path).resolve()),
         "test_outcomes": str(Path(test_outcomes).resolve()),
+        "candidate_selection": {
+            "policy": deployment_selection.expected_policy,
+            "manifest": str(deployment_selection.path),
+            "manifest_sha256": deployment_selection.sha256,
+            "ground_truth_access": "none-during-selection",
+        },
         "test_matrix_audit": matrix_audit,
         "policies": to_dict(policy_metrics),
         "policy_negative_candidate_false_positive_rates": false_positive_rates,
@@ -1283,3 +1363,11 @@ def _policy_false_positive_rates(router, rows: list) -> dict[str, dict[str, floa
             "selected_outcome_count": selected_outcomes,
         }
     return report
+
+
+def _file_sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

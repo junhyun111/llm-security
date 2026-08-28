@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .aggregation import FindingAggregator
-from .analysis import SemanticStaticAnalyzer
+from .analysis import LearnedCandidateRanker, SemanticStaticAnalyzer
 from .config import AppConfig
 from .evidence import ContextBuilder
 from .experts import BatchedExpertRunner, ExpertRunner
@@ -44,15 +44,50 @@ def build_context_builder(config: AppConfig) -> ContextBuilder:
     )
 
 
-def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
-    client = build_openrouter_client(config)
-    analyzer = (
-        SemanticStaticAnalyzer()
-        if config.analysis.backend == "semantic"
-        else LightweightStaticAnalyzer(
+def build_candidate_analyzer(
+    config: AppConfig,
+    *,
+    max_source_bytes: int = 2 * 1024 * 1024,
+    parse_timeout_ms: int = 30_000,
+    require_ranker: bool = False,
+):
+    """Build the configured analyzer and fail closed for required rankers."""
+
+    config.validate()
+    if config.analysis.backend == "legacy":
+        if require_ranker:
+            raise ValueError(
+                "The learned Utility Router requires the semantic Candidate Ranker"
+            )
+        return LightweightStaticAnalyzer(
             max_candidates=None,
             context_lines=config.analysis.context_lines,
         )
+
+    ranker = None
+    if config.analysis.candidate_ranker_path:
+        ranker_path = config.analysis.candidate_ranker_path
+        try:
+            ranker = LearnedCandidateRanker.load(ranker_path)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"Cannot load configured Candidate Ranker artifact: {ranker_path}"
+            ) from exc
+    elif config.analysis.candidate_ranker_required or require_ranker:
+        raise ValueError("A Candidate Ranker artifact is required but not configured")
+
+    return SemanticStaticAnalyzer(
+        max_source_bytes=max_source_bytes,
+        parse_timeout_ms=parse_timeout_ms,
+        candidate_ranker=ranker,
+    )
+
+
+def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
+    client = build_openrouter_client(config)
+    analyzer = build_candidate_analyzer(
+        config,
+        require_ranker=isinstance(router, BudgetedUtilityRouter),
     )
     return VulnerabilityPipeline(
         analyzer=analyzer,
@@ -66,6 +101,9 @@ def build_pipeline(config: AppConfig, router: Router) -> VulnerabilityPipeline:
         aggregator=FindingAggregator(),
         validator=EvidenceValidator(
             minimum_confidence=config.validation.minimum_confidence,
+            minimum_confidence_by_expert=(
+                config.validation.minimum_confidence_by_expert
+            ),
             client=client,
             model=config.model.validator_model,
             strong_model=config.model.strong_model,
@@ -92,7 +130,10 @@ def build_batched_web_pipeline(
     client = build_openrouter_client(config)
     if isinstance(router, BudgetedUtilityRouter):
         router.restrict_to_model(config.model.expert_model)
-    analyzer = SemanticStaticAnalyzer()
+    analyzer = build_candidate_analyzer(
+        config,
+        require_ranker=isinstance(router, BudgetedUtilityRouter),
+    )
     return VulnerabilityPipeline(
         analyzer=analyzer,
         router=router,
@@ -106,6 +147,9 @@ def build_batched_web_pipeline(
         aggregator=FindingAggregator(),
         validator=EvidenceValidator(
             minimum_confidence=config.validation.minimum_confidence,
+            minimum_confidence_by_expert=(
+                config.validation.minimum_confidence_by_expert
+            ),
             client=None,
             model=None,
             strong_model=None,

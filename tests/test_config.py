@@ -1,6 +1,7 @@
 import pytest
 
 from llm_security.config import AppConfig
+from llm_security.models import ExpertFamily
 
 
 MODEL_ENV = (
@@ -133,3 +134,49 @@ def test_candidate_gate_is_off_by_default(tmp_path, monkeypatch) -> None:
     env_file.write_text(MODEL_ENV, encoding="utf-8")
     config = AppConfig.from_env(env_file)
     assert config.candidate_gate.enabled is False
+
+
+def test_candidate_ranker_path_is_resolved_relative_to_env_file(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        MODEL_ENV
+        + "CANDIDATE_RANKER_PATH=artifacts/ranker.pkl\n"
+        + "CANDIDATE_RANKER_REQUIRED=true\n",
+        encoding="utf-8",
+    )
+
+    config = AppConfig.from_env(env_file)
+
+    assert config.analysis.max_candidates_per_project == 4
+    assert config.analysis.candidate_ranker_path == str(
+        (tmp_path / "artifacts/ranker.pkl").resolve()
+    )
+    assert config.analysis.candidate_ranker_required is True
+
+
+def test_required_candidate_ranker_needs_a_path(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        MODEL_ENV + "CANDIDATE_RANKER_REQUIRED=true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="CANDIDATE_RANKER_PATH is required"):
+        AppConfig.from_env(env_file)
+
+
+def test_per_expert_validator_thresholds_are_loaded(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        MODEL_ENV
+        + "MINIMUM_CONFIDENCE=0.55\n"
+        + "MINIMUM_CONFIDENCE_INTEGER_SIZE_TYPE=0.73\n",
+        encoding="utf-8",
+    )
+
+    config = AppConfig.from_env(env_file)
+
+    assert config.validation.minimum_confidence == 0.55
+    assert config.validation.minimum_confidence_by_expert[
+        ExpertFamily.INTEGER_SIZE_TYPE
+    ] == 0.73

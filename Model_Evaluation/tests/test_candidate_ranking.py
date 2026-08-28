@@ -79,6 +79,7 @@ def test_candidate_ranker_suite_selects_and_rewrites_cache() -> None:
         seed=7,
     )
     assert report["selected_backend"] in {"logistic_regression", "gradient_boosting"}
+    assert len(report["selected_artifact_sha256"]) == 64
     assert report["variants"][report["selected_backend"]]["recall_at_k"]["1"] == 1.0
 
     ranked_path = work / "dev_candidates_ranked.jsonl"

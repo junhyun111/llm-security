@@ -1,0 +1,83 @@
+{
+  "dev": {
+    "candidate_cache": "D:\\llm-security\\Model_Evaluation\\work\\router_training_stratified_7500\\candidates\\candidates_dev.jsonl",
+    "cases": "D:\\llm-security\\Model_Evaluation\\work\\router_training_stratified_7500\\cases\\cases_dev.jsonl"
+  },
+  "feature_schema": "semantic-cwe-v3",
+  "seed": 2026,
+  "selected_artifact": "D:\\llm-security\\Model_Evaluation\\artifacts\\candidate_ranker\\candidate_ranker.pkl",
+  "selected_artifact_sha256": "e77e98da69137e5a87118430f59b2be6fcca408614ac0a81156eab1078ee9a98",
+  "selected_backend": "small_mlp",
+  "selection_metric": "dev_recall_at_4",
+  "train": {
+    "candidate_cache": "D:\\llm-security\\Model_Evaluation\\work\\router_training_stratified_7500\\candidates\\candidates_train.jsonl",
+    "candidate_count": 22622,
+    "case_count": 5982,
+    "cases": "D:\\llm-security\\Model_Evaluation\\work\\router_training_stratified_7500\\cases\\cases_train.jsonl",
+    "ground_truth_count": 6033,
+    "negative_candidate_count": 18122,
+    "positive_candidate_count": 4500
+  },
+  "variants": {
+    "gradient_boosting": {
+      "artifact": "D:\\llm-security\\Model_Evaluation\\artifacts\\candidate_ranker\\candidate_ranker_gradient_boosting.pkl",
+      "artifact_sha256": "f4e2d38530ae59c9425625da767a46ae50b5ff15fca56689a036811efb75fa3f",
+      "candidate_count": 6003,
+      "case_count": 1499,
+      "ground_truth_count": 1514,
+      "ground_truth_hits_at_k": {
+        "1": 1006,
+        "2": 1167,
+        "4": 1225,
+        "8": 1234
+      },
+      "positive_candidate_count": 1220,
+      "recall_at_k": {
+        "1": 0.6644649933949802,
+        "2": 0.7708058124174373,
+        "4": 0.8091149273447821,
+        "8": 0.8150594451783355
+      }
+    },
+    "logistic_regression": {
+      "artifact": "D:\\llm-security\\Model_Evaluation\\artifacts\\candidate_ranker\\candidate_ranker_logistic_regression.pkl",
+      "artifact_sha256": "5f961e64f90ddf808a08e4d565b66f48544035aaed5183e12c4dee77e73baf1c",
+      "candidate_count": 6003,
+      "case_count": 1499,
+      "ground_truth_count": 1514,
+      "ground_truth_hits_at_k": {
+        "1": 706,
+        "2": 1005,
+        "4": 1204,
+        "8": 1234
+      },
+      "positive_candidate_count": 1220,
+      "recall_at_k": {
+        "1": 0.4663143989431968,
+        "2": 0.6638044914134742,
+        "4": 0.7952443857331571,
+        "8": 0.8150594451783355
+      }
+    },
+    "small_mlp": {
+      "artifact": "D:\\llm-security\\Model_Evaluation\\artifacts\\candidate_ranker\\candidate_ranker_small_mlp.pkl",
+      "artifact_sha256": "e77e98da69137e5a87118430f59b2be6fcca408614ac0a81156eab1078ee9a98",
+      "candidate_count": 6003,
+      "case_count": 1499,
+      "ground_truth_count": 1514,
+      "ground_truth_hits_at_k": {
+        "1": 962,
+        "2": 1163,
+        "4": 1233,
+        "8": 1234
+      },
+      "positive_candidate_count": 1220,
+      "recall_at_k": {
+        "1": 0.6354029062087186,
+        "2": 0.7681638044914135,
+        "4": 0.8143989431968296,
+        "8": 0.8150594451783355
+      }
+    }
+  }
+}
