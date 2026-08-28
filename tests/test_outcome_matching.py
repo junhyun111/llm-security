@@ -68,6 +68,18 @@ def test_matching_cwe_and_valid_evidence_is_success() -> None:
     )
 
 
+def test_numeric_conversion_evidence_matches_integer_truth() -> None:
+    candidate = _candidate(
+        Evidence("E1", "numeric_conversion", "x.c", 10, "(short)n", "f")
+    )
+    truth = GroundTruth(
+        "T1", "x.c", "f", 10, 10, [ExpertFamily.INTEGER_SIZE_TYPE], ["CWE-681"]
+    )
+    assert FindingTruthMatcher().matches(
+        _finding(cwes=["CWE-681"], evidence_ids=["E1"]), truth, candidate
+    )
+
+
 def test_integer_root_cause_can_match_memory_sink_with_causal_evidence() -> None:
     candidate = _candidate(
         Evidence("E1", "arithmetic_to_memory_sink", "x.c", 10, "n + 1 -> memcpy", "f")

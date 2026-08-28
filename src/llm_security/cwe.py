@@ -74,6 +74,7 @@ _EVIDENCE_CATEGORIES = {
     "unchecked_nullable_dereference": "memory_temporal",
     "integer_arithmetic": "integer",
     "type_conversion": "integer",
+    "numeric_conversion": "integer",
     "arithmetic_to_allocation": "integer",
     "arithmetic_to_memory_sink": "integer",
     "cast_to_size_sink": "integer",

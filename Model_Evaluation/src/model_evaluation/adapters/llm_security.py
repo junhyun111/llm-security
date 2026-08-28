@@ -38,6 +38,20 @@ def semantic_analyzer(*, max_source_bytes: int | None, parse_timeout_ms: int):
     )
 
 
+def semantic_feature_schema() -> str:
+    activate_parent_package()
+    from llm_security.analysis.features import SemanticFeatureExtractor
+
+    return SemanticFeatureExtractor.schema_version
+
+
+def semantic_analyzer_version() -> str:
+    activate_parent_package()
+    from llm_security.analysis.semantic_static import SemanticStaticAnalyzer
+
+    return SemanticStaticAnalyzer.analysis_version
+
+
 def case_from_dict(raw: dict):
     activate_parent_package()
     from llm_security.datasets import case_from_dict as restore
@@ -137,7 +151,7 @@ def active_experts():
 def expert_assignments(
     model_ids: list[str] | tuple[str, ...],
     *,
-    prompt_version: str = "batched-expert-v4-ko-cwe-hypothesis",
+    prompt_version: str = "batched-expert-v5-ko-proof-context",
 ):
     activate_parent_package()
     from llm_security.models import ACTIVE_UTILITY_EXPERTS, ExpertAssignment

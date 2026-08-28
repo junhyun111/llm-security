@@ -7,6 +7,11 @@ from ..models import CweHypothesis, Evidence
 
 
 _DIRECT_RULES: dict[str, tuple[str, float, str]] = {
+    "integer_arithmetic": (
+        "CWE-190",
+        0.55,
+        "integer arithmetic may wrap before a security-sensitive use",
+    ),
     "memory_copy_without_guard": (
         "CWE-120",
         0.95,

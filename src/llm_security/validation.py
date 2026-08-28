@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from .cwe import cwes_supported_by_evidence
 from .evidence import _separate_cpp_comments
@@ -43,8 +43,20 @@ class EvidenceValidator:
         strong_model: str | None = None,
         use_llm_for_uncertain: bool = True,
         falsify_all_supported: bool = False,
+        minimum_confidence_by_expert: Mapping[ExpertFamily | str, float] | None = None,
     ) -> None:
+        if not 0.0 <= minimum_confidence <= 1.0:
+            raise ValueError("minimum_confidence must be between 0 and 1")
         self.minimum_confidence = minimum_confidence
+        self.minimum_confidence_by_expert = {
+            ExpertFamily(expert): float(value)
+            for expert, value in (minimum_confidence_by_expert or {}).items()
+        }
+        if any(
+            not 0.0 <= value <= 1.0
+            for value in self.minimum_confidence_by_expert.values()
+        ):
+            raise ValueError("Expert confidence thresholds must be between 0 and 1")
         self.client = client
         self.model = model
         self.strong_model = strong_model
@@ -109,7 +121,9 @@ class EvidenceValidator:
             "cwe_semantics_supported": cwes_supported_by_evidence(
                 finding.cwes, cited_evidence
             ),
-            "confidence_sufficient": finding.confidence >= self.minimum_confidence,
+            "confidence_sufficient": (
+                finding.confidence >= self.confidence_threshold_for(finding.expert)
+            ),
             "contradicting_guard": self._has_contradicting_guard(finding, candidate),
         }
         reasons: list[str] = []
@@ -120,17 +134,29 @@ class EvidenceValidator:
             "evidence_exists",
             "evidence_ids_valid",
         ]
-        if candidate.feature_schema_version == "semantic-cwe-v2":
-            hard_checks.extend(("cwe_present", "cwe_semantics_supported"))
         if not all(bool(checks[name]) for name in hard_checks):
             verdict = ValidationVerdict.REJECTED
             reasons.append("위치 또는 인용된 정적 근거를 확인할 수 없습니다.")
         elif checks["contradicting_guard"]:
             verdict = ValidationVerdict.REJECTED
             reasons.append("정적 guard가 보고된 보호 로직 누락 주장과 모순됩니다.")
+        elif (
+            candidate.feature_schema_version.startswith("semantic-cwe-")
+            and (
+                not checks["cwe_present"]
+                or not checks["cwe_semantics_supported"]
+            )
+        ):
+            verdict = ValidationVerdict.UNCERTAIN
+            reasons.append(
+                "정적 evidence만으로 보고된 CWE 의미를 충분히 확인할 수 없어 "
+                "추가 검증이 필요합니다."
+            )
         elif not checks["confidence_sufficient"]:
             verdict = ValidationVerdict.UNCERTAIN
-            reasons.append("취약점 신뢰도가 검증 임계값보다 낮습니다.")
+            reasons.append(
+                "취약점 신뢰도가 해당 Expert의 검증 임계값보다 낮습니다."
+            )
         else:
             verdict = ValidationVerdict.VALIDATED
             reasons.append("위치와 인용된 정적 근거가 분석 후보와 일치합니다.")
@@ -140,6 +166,11 @@ class EvidenceValidator:
             confidence=finding.confidence,
             checks=checks,
             reasons=reasons,
+        )
+
+    def confidence_threshold_for(self, expert: ExpertFamily) -> float:
+        return self.minimum_confidence_by_expert.get(
+            expert, self.minimum_confidence
         )
 
     @staticmethod

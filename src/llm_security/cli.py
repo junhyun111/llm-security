@@ -298,7 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--backend",
         choices=("all", "legacy", "semantic"),
         default="semantic",
-        help="Prepare semantic-cwe-v2 by default, or explicitly request legacy/all.",
+        help="Prepare semantic-cwe-v3 by default, or explicitly request legacy/all.",
     )
     _add_semantic_safety_options(phase2e_prepare_parser)
     _add_analysis_checkpoint_options(phase2e_prepare_parser)

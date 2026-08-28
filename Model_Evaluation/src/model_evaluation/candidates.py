@@ -11,6 +11,8 @@ from .adapters.llm_security import (
     candidate_to_dict,
     case_from_dict,
     semantic_analyzer,
+    semantic_analyzer_version,
+    semantic_feature_schema,
 )
 from .jsonl import iter_jsonl, write_jsonl
 from .paths import EVALUATION_ROOT, require_within, write_json
@@ -29,6 +31,8 @@ def cache_candidates(
     destination = require_within(output_path, EVALUATION_ROOT)
     cases_source = Path(cases_path).resolve()
     source_stat = cases_source.stat()
+    feature_schema = semantic_feature_schema()
+    analyzer_version = semantic_analyzer_version()
     summary_path = destination.with_suffix(".summary.json")
     if reuse_existing and destination.is_file() and summary_path.is_file():
         existing = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -38,6 +42,8 @@ def cache_candidates(
             and int(existing.get("cases_mtime_ns", -1)) == source_stat.st_mtime_ns
             and existing.get("max_source_bytes") == max_source_bytes
             and int(existing.get("parse_timeout_ms", -1)) == parse_timeout_ms
+            and existing.get("feature_schema") == feature_schema
+            and existing.get("analyzer_version") == analyzer_version
         ):
             return existing
     analyzer = semantic_analyzer(
@@ -106,7 +112,8 @@ def cache_candidates(
         ),
         "analysis_failure_count": len(failures),
         "elapsed_seconds": perf_counter() - started,
-        "feature_schema": "semantic-cwe-v2",
+        "feature_schema": feature_schema,
+        "analyzer_version": analyzer_version,
     }
     write_json(summary_path, summary)
     return summary

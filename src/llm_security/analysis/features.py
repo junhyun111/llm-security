@@ -66,6 +66,14 @@ FEATURE_SCHEMA_SEMANTIC_CWE_V2 = (
     *(f"cwe_{number}_score" for number in CWE_SCORE_NUMBERS),
 )
 
+FEATURE_SCHEMA_SEMANTIC_CWE_V3 = (
+    *FEATURE_SCHEMA_SEMANTIC_CWE_V2,
+    "integer_arithmetic_count",
+    "unchecked_call_result_count",
+    "error_path_count",
+    "state_transition_count",
+)
+
 
 FACT_FEATURE_MAP = {
     SemanticFactKind.ALLOCATION: "allocation_count",
@@ -79,6 +87,7 @@ FACT_FEATURE_MAP = {
     SemanticFactKind.ARITHMETIC_TO_ALLOCATION: "arithmetic_to_allocation_count",
     SemanticFactKind.ARITHMETIC_TO_MEMORY_SINK: "arithmetic_to_memory_sink_count",
     SemanticFactKind.CAST_TO_SIZE_SINK: "cast_to_size_sink_count",
+    SemanticFactKind.INTEGER_ARITHMETIC: "integer_arithmetic_count",
     SemanticFactKind.NUMERIC_CONVERSION: "numeric_conversion_count",
     SemanticFactKind.TAINT_SOURCE: "taint_source_count",
     SemanticFactKind.TAINT_SINK: "taint_sink_count",
@@ -86,6 +95,9 @@ FACT_FEATURE_MAP = {
     SemanticFactKind.UNSANITIZED_SOURCE_TO_SINK: "unsanitized_source_to_sink_count",
     SemanticFactKind.UNINITIALIZED_USE: "uninitialized_use_count",
     SemanticFactKind.UNCHECKED_NULLABLE_DEREFERENCE: "unchecked_nullable_dereference_count",
+    SemanticFactKind.UNCHECKED_CALL_RESULT: "unchecked_call_result_count",
+    SemanticFactKind.ERROR_PATH: "error_path_count",
+    SemanticFactKind.STATE_TRANSITION: "state_transition_count",
     SemanticFactKind.THREAD_SPAWN: "thread_spawn_count",
     SemanticFactKind.LOCK_ACQUIRE: "lock_acquire_count",
     SemanticFactKind.LOCK_RELEASE: "lock_release_count",
@@ -94,7 +106,7 @@ FACT_FEATURE_MAP = {
 
 
 class SemanticFeatureExtractor:
-    schema_version = "semantic-cwe-v2"
+    schema_version = "semantic-cwe-v3"
 
     def extract(
         self,
@@ -104,7 +116,7 @@ class SemanticFeatureExtractor:
         callee_count: int,
         cwe_hypotheses: list[CweHypothesis] | None = None,
     ) -> dict[str, float]:
-        features = {name: 0.0 for name in FEATURE_SCHEMA_SEMANTIC_CWE_V2}
+        features = {name: 0.0 for name in FEATURE_SCHEMA_SEMANTIC_CWE_V3}
         structural = semantic_analysis.structural
         function = structural.function
         features.update(

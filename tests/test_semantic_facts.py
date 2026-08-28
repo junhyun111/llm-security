@@ -101,6 +101,68 @@ def test_explicit_numeric_conversion_is_detected_outside_size_sink() -> None:
     assert fact.attributes["cast_types"] == ["int"]
 
 
+def test_unchecked_status_return_is_detected_but_checked_result_is_not() -> None:
+    discarded = _analyze("void f(int fd, char *b) { read(fd, b, 8); use(b); }")
+    assigned = _analyze(
+        "void f(int fd, char *b) { int n = read(fd, b, 8); use(b, n); }"
+    )
+    checked = _analyze(
+        "void f(int fd, char *b) { int n = read(fd, b, 8); "
+        "if (n < 0) return; use(b, n); }"
+    )
+    direct_condition = _analyze(
+        "void f(int fd, char *b) { if (read(fd, b, 8) < 0) return; use(b); }"
+    )
+
+    discarded_fact = next(
+        fact
+        for fact in discarded.facts
+        if fact.kind == SemanticFactKind.UNCHECKED_CALL_RESULT
+    )
+    assert discarded_fact.attributes["result_usage"] == "discarded"
+    assigned_fact = next(
+        fact
+        for fact in assigned.facts
+        if fact.kind == SemanticFactKind.UNCHECKED_CALL_RESULT
+    )
+    assert assigned_fact.attributes["result_usage"] == "assigned_without_check"
+    assert SemanticFactKind.UNCHECKED_CALL_RESULT not in _kinds(checked)
+    assert SemanticFactKind.UNCHECKED_CALL_RESULT not in _kinds(direct_condition)
+    assert SemanticFactKind.ERROR_PATH in _kinds(checked)
+    assert SemanticFactKind.ERROR_PATH in _kinds(direct_condition)
+
+
+def test_assignment_arithmetic_conversion_and_state_transition_are_facts() -> None:
+    analysis = _analyze(
+        "void f(long input) { int status = 0; short n = (short)input; "
+        "int bytes = n * 4; status = bytes; use(status); }"
+    )
+
+    assert SemanticFactKind.INTEGER_ARITHMETIC in _kinds(analysis)
+    assert SemanticFactKind.NUMERIC_CONVERSION in _kinds(analysis)
+    assert SemanticFactKind.STATE_TRANSITION in _kinds(analysis)
+
+
+def test_implicit_signedness_and_narrowing_assignment_are_numeric_conversions() -> None:
+    analysis = _analyze(
+        "void f(long wide, int signed_value) { unsigned int u = signed_value; "
+        "short narrow = wide; use(u, narrow); }"
+    )
+
+    conversions = [
+        fact
+        for fact in analysis.facts
+        if fact.kind == SemanticFactKind.NUMERIC_CONVERSION
+        and fact.attributes.get("implicit_conversion")
+    ]
+    assert any(fact.attributes["signedness_change"] for fact in conversions)
+    assert any(fact.attributes["narrowing"] for fact in conversions)
+    assert {fact.attributes["destination_type"] for fact in conversions} == {
+        "unsigned int",
+        "short",
+    }
+
+
 def test_resolved_hostname_reaching_identity_comparison_is_tainted() -> None:
     analysis = _analyze(
         "void f(char *address) { struct hostent *host; "

@@ -34,7 +34,7 @@ class ExpertAssignment:
 
     expert: ExpertFamily
     model_id: str
-    prompt_version: str = "expert-v4-cwe-hypothesis"
+    prompt_version: str = "expert-v5-proof-context"
     expected_cost: float = 0.0
 
     @property
@@ -71,6 +71,23 @@ class CweHypothesis:
     reasons: list[str] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class RelatedFunctionSummary:
+    """Bounded one-hop context carried with a candidate for Expert review."""
+
+    relation: str
+    function_key: str
+    file: str
+    function: str
+    line_start: int
+    line_end: int
+    parameters: list[str] = field(default_factory=list)
+    calls: list[str] = field(default_factory=list)
+    semantic_facts: list[str] = field(default_factory=list)
+    code: str = ""
+    symbol_types: dict[str, str] = field(default_factory=dict)
+
+
 @dataclass(slots=True, init=False)
 class Candidate:
     candidate_id: str
@@ -87,6 +104,8 @@ class Candidate:
     callees: list[str]
     feature_schema_version: str
     cwe_hypotheses: list[CweHypothesis]
+    related_functions: list[RelatedFunctionSummary]
+    symbol_types: dict[str, str]
 
     def __init__(
         self,
@@ -104,6 +123,8 @@ class Candidate:
         callees: list[str] | None = None,
         feature_schema_version: str = "legacy-v1",
         cwe_hypotheses: list[CweHypothesis] | None = None,
+        related_functions: list[RelatedFunctionSummary] | None = None,
+        symbol_types: dict[str, str] | None = None,
         *,
         static_score: float | None = None,
     ) -> None:
@@ -126,6 +147,8 @@ class Candidate:
         self.callees = list(callees or [])
         self.feature_schema_version = feature_schema_version
         self.cwe_hypotheses = list(cwe_hypotheses or [])
+        self.related_functions = list(related_functions or [])
+        self.symbol_types = dict(symbol_types or {})
 
     @property
     def static_score(self) -> float:

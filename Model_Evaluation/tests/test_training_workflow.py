@@ -12,11 +12,147 @@ from model_evaluation.workflow import audit_outcome_matrix
 from model_evaluation.workflow import collect_outcome_matrix
 from model_evaluation.workflow import resolve_models
 from model_evaluation.adapters.llm_security import activate_parent_package
+from model_evaluation.diagnostics import (
+    audit_detection_stages,
+    calibrate_expert_confidence_thresholds,
+)
 
 
 class _Case:
     def __init__(self, case_id: str) -> None:
         self.case_id = case_id
+
+
+def test_stage_diagnostics_separate_raw_expert_and_validator_failures(tmp_path) -> None:
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text(
+        json.dumps(
+            {
+                "case_id": "case-stage",
+                "project_id": "project-stage",
+                "source_files": {"unit.c": "int f(int n) { return n + 1; }"},
+                "split": "test",
+                "ground_truth": [
+                    {
+                        "truth_id": "truth-stage",
+                        "file": "unit.c",
+                        "function": "f",
+                        "line_start": 1,
+                        "line_end": 1,
+                        "experts": ["integer_size_type"],
+                        "cwes": ["CWE-190"],
+                    }
+                ],
+                "metadata": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    candidate = {
+        "candidate_id": "candidate-stage",
+        "project_id": "project-stage",
+        "file": "unit.c",
+        "function": "f",
+        "line_start": 1,
+        "line_end": 3,
+        "code": "int f(int n) { return n + 1; }",
+        "evidence": [
+            {
+                "evidence_id": "EV-stage",
+                "kind": "integer_arithmetic",
+                "file": "unit.c",
+                "line": 1,
+                "expression": "n + 1",
+                "function": "f",
+                "facts": {},
+            }
+        ],
+        "features": {"bias": 1.0},
+        "suspicion_score": 0.9,
+        "feature_schema_version": "semantic-cwe-v3",
+        "cwe_hypotheses": [],
+    }
+    candidate_cache = tmp_path / "candidates.jsonl"
+    candidate_cache.write_text(
+        json.dumps({"case_id": "case-stage", "candidate": candidate}) + "\n",
+        encoding="utf-8",
+    )
+
+    def finding(finding_id: str, line: int, confidence: float = 0.9) -> dict:
+        return {
+            "finding_id": finding_id,
+            "candidate_id": "candidate-stage",
+            "expert": "integer_size_type",
+            "title": "integer overflow",
+            "root_cause": "integer overflow",
+            "consequence": "incorrect size",
+            "file": "unit.c",
+            "function": "f",
+            "line_start": line,
+            "line_end": line,
+            "cwes": ["CWE-190"],
+            "source": None,
+            "sink": None,
+            "missing_guard": None,
+            "trigger_path": [],
+            "evidence_ids": ["EV-stage"],
+            "confidence": confidence,
+        }
+
+    detections = tmp_path / "detections.jsonl"
+    detections.write_text(
+        json.dumps(
+            {
+                "case_id": "case-stage",
+                "matched_truth_ids": [],
+                "pipeline_result": {
+                    "candidates": [candidate],
+                    "findings": [
+                        finding("finding-true", 1),
+                        finding("finding-false", 3, 0.4),
+                    ],
+                    "validations": [
+                        {
+                            "finding_id": "finding-true",
+                            "verdict": "rejected",
+                            "checks": {"cwe_semantics_supported": False},
+                        },
+                        {
+                            "finding_id": "finding-false",
+                            "verdict": "rejected",
+                            "checks": {"line_reachable": True},
+                        },
+                    ],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    report = audit_detection_stages(
+        cases_path=cases,
+        candidate_cache=candidate_cache,
+        detection_path=detections,
+        max_candidates_per_case=1,
+    )
+    overall = report["overall"]
+    assert overall["candidate_recall"] == 1.0
+    assert overall["top_k_candidate_recall"] == 1.0
+    assert overall["raw_expert_recall"] == 1.0
+    assert overall["validated_recall"] == 0.0
+    assert overall["validator_true_finding_retention"] == 0.0
+    assert overall["validator_false_finding_rejection"] == 1.0
+    assert report["validator_true_finding_rejection_checks"] == {
+        "cwe_semantics_supported": 1
+    }
+    calibration = calibrate_expert_confidence_thresholds(
+        cases_path=cases,
+        detection_path=detections,
+        thresholds=(0.3, 0.5, 0.8),
+        minimum_precision=0.75,
+    )
+    assert calibration["minimum_confidence_by_expert"]["integer_size_type"] == 0.5
 
 
 def test_streaming_candidate_cache_handles_zero_candidate_case(tmp_path) -> None:
@@ -34,7 +170,7 @@ def test_streaming_candidate_cache_handles_zero_candidate_case(tmp_path) -> None
             "evidence": [],
             "features": {"bias": 1.0},
             "suspicion_score": 0.1,
-            "feature_schema_version": "semantic-cwe-v2",
+            "feature_schema_version": "semantic-cwe-v3",
             "cwe_hypotheses": [],
         },
     }
@@ -91,7 +227,7 @@ def test_matrix_audit_detects_wholly_missing_candidate_group(tmp_path) -> None:
         "line_end": 2,
         "features": {"bias": 1.0},
         "suspicion_score": 0.1,
-        "feature_schema_version": "semantic-cwe-v2",
+        "feature_schema_version": "semantic-cwe-v3",
         "cwe_hypotheses": [],
     }
     assignment = {
@@ -109,7 +245,7 @@ def test_matrix_audit_detects_wholly_missing_candidate_group(tmp_path) -> None:
                 "success": False,
                 "truth_labels_available": True,
                 "case_id": "case-a",
-                "label_version": "semantic-causal-v1",
+                "label_version": "semantic-causal-v2",
             }
         )
         + "\n",
@@ -201,7 +337,7 @@ def test_batched_collection_uses_one_request_per_case_and_resumes(
                     "evidence": [],
                     "features": {"bias": 1.0},
                     "suspicion_score": 0.1,
-                    "feature_schema_version": "semantic-cwe-v2",
+                    "feature_schema_version": "semantic-cwe-v3",
                     "cwe_hypotheses": [],
                 },
             }

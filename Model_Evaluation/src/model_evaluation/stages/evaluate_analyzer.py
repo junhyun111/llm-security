@@ -199,7 +199,7 @@ def evaluate_semantic_analyzer(
         "mapping_version": mapping.schema_version,
         "mapping_hash": mapping.mapping_hash,
         "analyzer": "SemanticStaticAnalyzer",
-        "feature_schema": "semantic-cwe-v2",
+        "feature_schema": analyzer.candidate_builder.feature_extractor.schema_version,
         "splits": split_reports,
         "overall": overall.report(),
         "per_expert": {

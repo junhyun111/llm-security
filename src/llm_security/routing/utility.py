@@ -138,9 +138,9 @@ class BudgetedUtilityRouter:
     learned Top2Sufficient gate.
     """
 
-    artifact_version = 4
-    expert_taxonomy_version = "five-expert-memory-safety-cwe-v2"
-    required_feature_schema_version = "semantic-cwe-v2"
+    artifact_version = 5
+    expert_taxonomy_version = "five-expert-memory-safety-cwe-v3"
+    required_feature_schema_version = "semantic-cwe-v3"
 
     def __init__(
         self,
@@ -149,7 +149,7 @@ class BudgetedUtilityRouter:
         statistics: dict[str, AssignmentStatistics],
         *,
         policy: UtilityPolicyConfig | None = None,
-        feature_schema_version: str = "semantic-cwe-v2",
+        feature_schema_version: str = "semantic-cwe-v3",
         escalation_gate: EscalationGate | None = None,
     ) -> None:
         self.model = model
@@ -226,7 +226,7 @@ class BudgetedUtilityRouter:
             )
         if schemas != {cls.required_feature_schema_version}:
             raise ValueError(
-                "Utility Router v4 requires static CWE hypothesis features with "
+                "Utility Router v5 requires static CWE hypothesis features with "
                 f"schema={cls.required_feature_schema_version}; regenerate semantic "
                 "candidates and recollect outcomes."
             )

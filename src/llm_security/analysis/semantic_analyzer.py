@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .analyzer import FunctionAnalysis, ProgramAnalysis, StructuralAnalyzer
-from .api_semantics import AllocationSpec, ApiCatalog, MemoryCopySpec
+from .api_semantics import AllocationSpec, ApiCatalog, MemoryCopySpec, StatusReturnSpec
 from .dataflow import backward_slice
 from .control_flow import dominates
 from .guards import GuardRelation, find_guard_relations
@@ -78,6 +79,13 @@ class SemanticAnalyzer:
             facts.extend(
                 self._numeric_conversion_facts(analysis, call, node_id, name)
             )
+            status_spec = self.catalog.status_returns.get(name)
+            if status_spec is not None:
+                unchecked = self._unchecked_call_result_fact(
+                    analysis, index, call, node_id, name, status_spec
+                )
+                if unchecked is not None:
+                    facts.append(unchecked)
             if name in self.catalog.allocations:
                 spec = self.catalog.allocations[name]
                 allocation_calls.append((call, node_id, spec))
@@ -253,6 +261,8 @@ class SemanticAnalyzer:
                 )
 
         facts.extend(self._lifetime_facts(analysis, index, release_calls))
+        facts.extend(self._expression_semantic_facts(analysis, index))
+        facts.extend(self._status_check_facts(analysis, index, calls))
         facts.extend(self._uninitialized_facts(analysis, index))
         facts.extend(
             self._nullable_dereference_facts(
@@ -266,6 +276,212 @@ class SemanticAnalyzer:
             facts=sort_facts(facts),
             taint_paths=taint_paths,
         )
+
+    def _expression_semantic_facts(
+        self,
+        analysis: FunctionAnalysis,
+        index: FunctionAnalysisIndex,
+    ) -> list[SemanticFact]:
+        facts: list[SemanticFact] = []
+        arithmetic_operators = {"+", "-", "*", "/", "%", "<<", ">>"}
+        for assignment in analysis.function.assignments:
+            node_id = index.assignment_to_node.get(assignment.assignment_id)
+            info = assignment.expression_info
+            if node_id is None or info is None:
+                continue
+            operators = sorted(info.operators & arithmetic_operators)
+            destination_type = _assignment_destination_type(
+                analysis, assignment.defs
+            )
+            source_types = _symbol_types_for(analysis, assignment.uses)
+            if operators:
+                facts.append(
+                    self._fact(
+                        analysis,
+                        SemanticFactKind.INTEGER_ARITHMETIC,
+                        subject=assignment.target,
+                        object="assignment",
+                        source_node_id=node_id,
+                        sink_node_id=node_id,
+                        path=[node_id],
+                        symbols=assignment.defs | assignment.uses,
+                        confidence=0.60 if not analysis.cfg.warnings else 0.45,
+                        attributes={
+                            "operators": operators,
+                            "expression": assignment.expression,
+                            "role": "assignment",
+                            "destination_type": destination_type,
+                            "source_types": source_types,
+                        },
+                    )
+                )
+            numeric_types = sorted(
+                cast_type
+                for cast_type in info.cast_types
+                if _is_numeric_cast_type(cast_type)
+            )
+            implicit_conversion = _implicit_integer_conversion(
+                destination_type, source_types
+            )
+            if numeric_types or implicit_conversion is not None:
+                facts.append(
+                    self._fact(
+                        analysis,
+                        SemanticFactKind.NUMERIC_CONVERSION,
+                        subject=assignment.target,
+                        object="assignment",
+                        source_node_id=node_id,
+                        sink_node_id=node_id,
+                        path=[node_id],
+                        symbols=assignment.defs | assignment.uses,
+                        confidence=(
+                            0.78
+                            if implicit_conversion is not None
+                            else 0.75
+                        ) if not analysis.cfg.warnings else 0.50,
+                        attributes={
+                            "cast_types": numeric_types,
+                            "expression": assignment.expression,
+                            "role": "assignment",
+                            "destination_type": destination_type,
+                            "source_types": source_types,
+                            **(implicit_conversion or {}),
+                        },
+                    )
+                )
+            target = assignment.target.rsplit("->", 1)[-1].rsplit(".", 1)[-1]
+            if re.search(
+                r"(?:state|status|phase|initialized|authenticated|mode|error)",
+                target,
+                re.IGNORECASE,
+            ):
+                facts.append(
+                    self._fact(
+                        analysis,
+                        SemanticFactKind.STATE_TRANSITION,
+                        subject=assignment.target,
+                        object=assignment.expression,
+                        source_node_id=node_id,
+                        sink_node_id=node_id,
+                        path=[node_id],
+                        symbols=assignment.defs | assignment.uses,
+                        confidence=0.55,
+                        attributes={
+                            "target": assignment.target,
+                            "expression": assignment.expression,
+                        },
+                    )
+                )
+
+        for condition in analysis.function.conditions:
+            infos = [
+                info
+                for info in (condition.left_info, condition.right_info)
+                if info is not None
+            ]
+            operators = sorted(
+                {
+                    operator
+                    for info in infos
+                    for operator in info.operators
+                    if operator in arithmetic_operators
+                }
+            )
+            if operators:
+                facts.append(
+                    self._fact(
+                        analysis,
+                        SemanticFactKind.INTEGER_ARITHMETIC,
+                        subject=",".join(sorted(condition.symbols)) or None,
+                        object="condition",
+                        source_node_id=condition.condition_id,
+                        sink_node_id=condition.condition_id,
+                        path=[condition.condition_id],
+                        symbols=condition.symbols,
+                        confidence=0.55 if not analysis.cfg.warnings else 0.40,
+                        attributes={
+                            "operators": operators,
+                            "expression": condition.expression,
+                            "role": "condition",
+                        },
+                    )
+                )
+            numeric_types = sorted(
+                {
+                    cast_type
+                    for info in infos
+                    for cast_type in info.cast_types
+                    if _is_numeric_cast_type(cast_type)
+                }
+            )
+            if numeric_types:
+                facts.append(
+                    self._fact(
+                        analysis,
+                        SemanticFactKind.NUMERIC_CONVERSION,
+                        subject=",".join(sorted(condition.symbols)) or None,
+                        object="condition",
+                        source_node_id=condition.condition_id,
+                        sink_node_id=condition.condition_id,
+                        path=[condition.condition_id],
+                        symbols=condition.symbols,
+                        confidence=0.70 if not analysis.cfg.warnings else 0.45,
+                        attributes={
+                            "cast_types": numeric_types,
+                            "expression": condition.expression,
+                            "role": "condition",
+                        },
+                    )
+                )
+        return facts
+
+    def _status_check_facts(
+        self,
+        analysis: FunctionAnalysis,
+        index: FunctionAnalysisIndex,
+        calls: list[CallSite],
+    ) -> list[SemanticFact]:
+        facts: list[SemanticFact] = []
+        for call in calls:
+            name = self.catalog.canonical_name(call.callee)
+            if name not in self.catalog.status_returns:
+                continue
+            node_id = index.node_for_call(call.call_id)
+            if node_id is None:
+                continue
+            result_symbols = _call_result_symbols(analysis, node_id)
+            checking_nodes = sorted(
+                condition.condition_id
+                for condition in index.condition_by_id.values()
+                if result_symbols & condition.symbols
+                and shortest_path(analysis.cfg, node_id, condition.condition_id)
+            )
+            if call.result_usage == "condition":
+                checking_nodes = [node_id]
+            for check_node in checking_nodes[:1]:
+                facts.append(
+                    self._fact(
+                        analysis,
+                        SemanticFactKind.ERROR_PATH,
+                        subject=",".join(sorted(result_symbols)) or name,
+                        object=name,
+                        source_node_id=node_id,
+                        sink_node_id=check_node,
+                        path=shortest_path(analysis.cfg, node_id, check_node)
+                        or [check_node],
+                        symbols=result_symbols,
+                        confidence=0.80 if not analysis.cfg.warnings else 0.55,
+                        attributes={
+                            "callee": name,
+                            "checked": True,
+                            "check_node_id": check_node,
+                            "failure_semantics": self.catalog.status_returns[
+                                name
+                            ].failure_semantics,
+                        },
+                    )
+                )
+        return facts
 
     def _numeric_conversion_facts(
         self,
@@ -303,6 +519,45 @@ class SemanticAnalyzer:
                 )
             )
         return facts
+
+    def _unchecked_call_result_fact(
+        self,
+        analysis: FunctionAnalysis,
+        index: FunctionAnalysisIndex,
+        call: CallSite,
+        node_id: str,
+        name: str,
+        spec: StatusReturnSpec,
+    ) -> SemanticFact | None:
+        if call.result_usage in {"condition", "returned", "argument", "expression"}:
+            return None
+        result_symbols = _call_result_symbols(analysis, node_id)
+        checking_nodes = sorted(
+            condition.condition_id
+            for condition in index.condition_by_id.values()
+            if result_symbols & condition.symbols
+            and shortest_path(analysis.cfg, node_id, condition.condition_id)
+        )
+        if checking_nodes:
+            return None
+        usage = "assigned_without_check" if result_symbols else "discarded"
+        return self._fact(
+            analysis,
+            SemanticFactKind.UNCHECKED_CALL_RESULT,
+            subject=",".join(sorted(result_symbols)) or None,
+            object=name,
+            source_node_id=node_id,
+            sink_node_id=node_id,
+            path=[node_id],
+            symbols=result_symbols,
+            confidence=0.85 if usage == "discarded" else 0.75,
+            attributes={
+                "callee": name,
+                "result_usage": usage,
+                "failure_semantics": spec.failure_semantics,
+                "checked": False,
+            },
+        )
 
     def _memory_copy_facts(
         self,
@@ -845,3 +1100,81 @@ def _is_numeric_cast_type(cast_type: str) -> bool:
             "ssize_t",
         }
     )
+
+
+def _assignment_destination_type(
+    analysis: FunctionAnalysis, symbols: set[str]
+) -> str | None:
+    return next(
+        (
+            analysis.function.symbol_types[symbol]
+            for symbol in sorted(symbols)
+            if symbol in analysis.function.symbol_types
+        ),
+        None,
+    )
+
+
+def _symbol_types_for(
+    analysis: FunctionAnalysis, symbols: set[str]
+) -> dict[str, str]:
+    return {
+        symbol: analysis.function.symbol_types[symbol]
+        for symbol in sorted(symbols)
+        if symbol in analysis.function.symbol_types
+    }
+
+
+def _implicit_integer_conversion(
+    destination_type: str | None,
+    source_types: dict[str, str],
+) -> dict[str, bool] | None:
+    destination = _integer_type_properties(destination_type)
+    sources = [
+        value
+        for raw in source_types.values()
+        for value in [_integer_type_properties(raw)]
+        if value is not None
+    ]
+    if destination is None or not sources:
+        return None
+    destination_signed, destination_rank = destination
+    signedness_change = any(
+        source_signed != destination_signed
+        for source_signed, _ in sources
+    )
+    narrowing = any(
+        source_rank > destination_rank for _, source_rank in sources
+    )
+    if not signedness_change and not narrowing:
+        return None
+    return {
+        "implicit_conversion": True,
+        "signedness_change": signedness_change,
+        "narrowing": narrowing,
+    }
+
+
+def _integer_type_properties(raw_type: str | None) -> tuple[bool, int] | None:
+    if not raw_type or "*" in raw_type:
+        return None
+    normalized = " ".join(raw_type.lower().split())
+    tokens = set(normalized.split())
+    if tokens & {"float", "double", "void", "struct", "union", "enum"}:
+        return None
+    if "size_t" in tokens:
+        return True, 4
+    if "ssize_t" in tokens:
+        return False, 4
+    if not tokens & {"char", "short", "int", "long", "signed", "unsigned"}:
+        return None
+    unsigned = "unsigned" in tokens
+    if "char" in tokens:
+        rank = 1
+    elif "short" in tokens:
+        rank = 2
+    elif "long" in tokens:
+        rank = 5 if normalized.count("long") >= 2 else 4
+    else:
+        rank = 3
+    return unsigned, rank

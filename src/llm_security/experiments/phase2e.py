@@ -656,7 +656,7 @@ def _experiment_manifest(
         "llm_api_calls": 0,
         "git_commit": _git_commit(),
         "seed": config.seed,
-        "feature_schemas": ["legacy-v1", "semantic-cwe-v2"],
+        "feature_schemas": ["legacy-v1", "semantic-cwe-v3"],
         "router": "multiclass_logistic_regression",
         "classifier_hyperparameters_shared": True,
         "gate_calibration_split": "dev",

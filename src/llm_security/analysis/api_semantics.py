@@ -49,6 +49,11 @@ class SanitizerSpec:
     arguments: tuple[int, ...] = ()
 
 
+@dataclass(slots=True, frozen=True)
+class StatusReturnSpec:
+    failure_semantics: str
+
+
 @dataclass(slots=True)
 class ApiCatalog:
     memory_copy: dict[str, MemoryCopySpec] = field(default_factory=dict)
@@ -57,6 +62,7 @@ class ApiCatalog:
     taint_sources: dict[str, SourceSpec] = field(default_factory=dict)
     taint_sinks: dict[str, SinkSpec] = field(default_factory=dict)
     sanitizers: dict[str, SanitizerSpec] = field(default_factory=dict)
+    status_returns: dict[str, StatusReturnSpec] = field(default_factory=dict)
     thread_spawn: set[str] = field(default_factory=set)
     lock_acquire: set[str] = field(default_factory=set)
     lock_release: set[str] = field(default_factory=set)
@@ -95,6 +101,26 @@ class ApiCatalog:
                 "fprintf": SinkSpec((1,)),
                 "strcmp": SinkSpec((0, 1)),
                 "strncmp": SinkSpec((0, 1)),
+            },
+            status_returns={
+                "read": StatusReturnSpec("negative return indicates failure"),
+                "recv": StatusReturnSpec("negative return indicates failure"),
+                "fread": StatusReturnSpec("short return may indicate failure"),
+                "fgets": StatusReturnSpec("null return indicates failure"),
+                "scanf": StatusReturnSpec("conversion count or EOF indicates failure"),
+                "fscanf": StatusReturnSpec("conversion count or EOF indicates failure"),
+                "sscanf": StatusReturnSpec("conversion count or EOF indicates failure"),
+                "open": StatusReturnSpec("negative return indicates failure"),
+                "close": StatusReturnSpec("nonzero return indicates failure"),
+                "stat": StatusReturnSpec("nonzero return indicates failure"),
+                "lstat": StatusReturnSpec("nonzero return indicates failure"),
+                "access": StatusReturnSpec("nonzero return indicates failure"),
+                "rename": StatusReturnSpec("nonzero return indicates failure"),
+                "remove": StatusReturnSpec("nonzero return indicates failure"),
+                "system": StatusReturnSpec("negative or command-status return indicates failure"),
+                "pthread_create": StatusReturnSpec("nonzero return indicates failure"),
+                "pthread_mutex_lock": StatusReturnSpec("nonzero return indicates failure"),
+                "pthread_mutex_unlock": StatusReturnSpec("nonzero return indicates failure"),
             },
             thread_spawn={"pthread_create", "stdThreadCreate"},
             lock_acquire={"pthread_mutex_lock", "stdThreadLockAcquire"},

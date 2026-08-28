@@ -31,6 +31,7 @@ class CallSite:
     text: str
     argument_symbols: list[set[str]] = field(default_factory=list)
     argument_info: list[ExpressionInfo] = field(default_factory=list)
+    result_usage: str = "unknown"
 
 
 @dataclass(slots=True)
@@ -114,6 +115,7 @@ class FunctionIR:
     statements: list[StatementIR] = field(default_factory=list)
     controls: list[ControlRegion] = field(default_factory=list)
     unsupported_constructs: list[str] = field(default_factory=list)
+    symbol_types: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

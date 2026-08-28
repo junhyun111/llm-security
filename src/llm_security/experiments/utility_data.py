@@ -114,12 +114,15 @@ def collect_expert_outcomes(
                 output = expert_runner.run([candidate], [route])
                 accepted: list[Finding] = []
                 rejected = 0
+                uncertain = 0
                 for finding in output.findings:
                     result = validator.validate(finding, candidate)
                     if result.verdict.value == "validated":
                         accepted.append(finding)
-                    else:
+                    elif result.verdict.value == "rejected":
                         rejected += 1
+                    else:
+                        uncertain += 1
                 success = any(
                     matcher.matches(finding, truth, candidate)
                     for finding in accepted
@@ -171,6 +174,7 @@ def collect_expert_outcomes(
                     validated_true_findings=validated_true_findings,
                     validated_false_findings=validated_false_findings,
                     rejected_findings=rejected,
+                    uncertain_findings=uncertain,
                 )
                 with destination.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(utility_sample_to_dict(sample), ensure_ascii=False) + "\n")

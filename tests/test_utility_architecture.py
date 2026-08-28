@@ -43,7 +43,7 @@ def _candidate(candidate_id: str, *, rare: float = 0.0) -> Candidate:
         evidence=[Evidence("E1", "use_after_release", "x.c", 2, "p[0]", "f")],
         features={"use_after_release_count": rare, "memory_copy_count": 1.0 - rare},
         suspicion_score=0.9,
-        feature_schema_version="semantic-cwe-v2",
+        feature_schema_version="semantic-cwe-v3",
     )
 
 

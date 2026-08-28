@@ -59,8 +59,9 @@ generated files inside `Model_Evaluation`:
 
 - `train.ipynb`: preserve the frozen splits, create deterministic stratified
   Train 6,000 / Dev 1,500 cohorts, preserve every E6 case, prioritize CWE and
-  leakage-family diversity, collect resumable batched outcomes, and compare
-  Logistic Regression, Gradient Boosting, and a shared multi-task MLP Router.
+  leakage-family diversity, train LR/GBDT/small-MLP Candidate Rankers by dev
+  Recall@1/2/4/8, collect resumable batched outcomes, calibrate per-Expert
+  validation thresholds on Dev, and train the Utility Router.
 - `evaluation.ipynb`: evaluate all three Router variants on the complete frozen
   Test split of 8,337 scenarios, report micro/per-Expert/macro metrics, and run
   optional batched patch verification for ground-truth-matched findings.
@@ -94,9 +95,16 @@ request. The five Expert outcomes remain separately attributed for Utility
 Router training, but they are not five separate API calls.
 
 Each completed case is atomically checkpointed. Re-running the collection cell
-skips completed cases, consolidates their outcome rows, and continues from the
-first missing case. Router training and final test evaluation refuse partial or
+skips completed cases only when the model, prompt version, candidate IDs,
+feature schema, and validator thresholds match. A prompt/schema/policy change
+therefore invalidates stale case checkpoints instead of silently mixing
+experiments. Router training and final test evaluation refuse partial or
 duplicate matrices.
+
+Candidate extraction and Candidate Ranker training are local and make no LLM
+API calls. API calls begin only in the batched Expert outcome cell. The selected
+ranker is fitted on Train, selected on Dev Recall@4, and then applied unchanged
+to Test.
 
 Outcome collection uses an `asyncio.Semaphore` completion pool with
 `MAX_CONCURRENCY = 1000`. It does not wait for a fixed chunk to finish: whenever
@@ -124,6 +132,9 @@ selection and its sampling weight is recorded in a deterministic manifest.
 The saved reports include:
 
 - Analyzer Candidate Recall and candidate-gate retention;
+- Candidate Ranker Recall@1, Recall@2, Recall@4, and Recall@8;
+- raw Expert Recall, validator true-finding retention, false-finding rejection,
+  and final validated Recall as separate stage metrics;
 - validated finding Precision, truth Recall, F1, and exact case coverage;
 - escalation recall, missed/unnecessary escalation rates, and Full-5 rate;
 - average logical Expert count, request accounting, tokens, cost, and latency;
@@ -133,6 +144,13 @@ The saved reports include:
 - Brier score and expected calibration error for Router probabilities;
 - optional nested 1k/2k/4k/6k MLP learning curves with E6 preserved;
 - optional patch apply rate and compile/test-verified repair rate.
+
+The Expert prompt receives an evidence-local code slice, evidence/value-flow
+graph, available type/conversion facts, and bounded direct caller/callee
+summaries. Each Expert follows a domain-specific proof obligation. Missing
+static CWE support or an Expert-specific confidence miss is recorded as
+`uncertain`, while impossible locations and invalid evidence IDs remain hard
+rejections.
 
 ### GPU MLP training
 
@@ -169,7 +187,11 @@ work/router_training_stratified_7500/outcomes/
 work/router_training_stratified_7500/ledgers/
 artifacts/juliet_utility_router.pkl
 artifacts/juliet_utility_router_multitask_mlp.pkl
+artifacts/candidate_ranker/candidate_ranker.pkl
+artifacts/candidate_ranker/candidate_ranker_{logistic_regression,gradient_boosting,small_mlp}.pkl
 results/router_training_stratified_7500/training_report.json
+results/router_training_stratified_7500/candidate_ranker_report.json
+results/router_training_stratified_7500/validator_calibration.json
 results/router_training_stratified_7500/learning_curves.json
 work/router_evaluation_full_test/
 results/router_evaluation_full_test/evaluation_*.json

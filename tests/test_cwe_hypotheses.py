@@ -42,7 +42,7 @@ def test_static_cwe_hypotheses_are_evidence_backed_router_features() -> None:
     hypotheses = {item.cwe: item for item in candidate.cwe_hypotheses}
     evidence_ids = {item.evidence_id for item in candidate.evidence}
 
-    assert candidate.feature_schema_version == "semantic-cwe-v2"
+    assert candidate.feature_schema_version == "semantic-cwe-v3"
     assert {"CWE-416", "CWE-787"} <= set(hypotheses)
     assert all(set(item.evidence_ids) <= evidence_ids for item in hypotheses.values())
     assert candidate.features["cwe_memory_score"] > 0.0
@@ -104,12 +104,16 @@ def test_router_jsonl_and_prompt_preserve_fallible_cwe_hypotheses(
     assert "verify; do not copy blindly" in messages[-1]["content"]
     assert "natural Korean" in messages[0]["content"]
     assert "Do not translate JSON property names" in messages[0]["content"]
+    assert "domain proof procedure" in messages[0]["content"]
+    assert "ownership state" in messages[0]["content"]
+    assert "Evidence graph / value-flow leads" in messages[-1]["content"]
 
     batched = batched_expert_messages(
         [{"expert_tasks": [{"expert": ExpertFamily.MEMORY_SAFETY.value}]}]
     )
     assert "natural Korean" in batched[0]["content"]
     assert "Do not translate JSON property names" in batched[0]["content"]
+    assert "ownership state" in batched[0]["content"]
 
 
 def test_validator_requires_cwe_semantics_to_match_cited_evidence() -> None:
@@ -143,8 +147,81 @@ def test_validator_requires_cwe_semantics_to_match_cited_evidence() -> None:
 
     assert supported.verdict == ValidationVerdict.VALIDATED
     assert supported.checks["cwe_semantics_supported"] is True
-    assert unsupported.verdict == ValidationVerdict.REJECTED
+    assert unsupported.verdict == ValidationVerdict.UNCERTAIN
     assert unsupported.checks["cwe_semantics_supported"] is False
+
+    calibrated = EvidenceValidator(
+        minimum_confidence_by_expert={ExpertFamily.MEMORY_SAFETY: 0.95}
+    ).validate(finding("CWE-416"), candidate)
+    assert calibrated.verdict == ValidationVerdict.UNCERTAIN
+    assert calibrated.checks["confidence_sufficient"] is False
+
+
+def test_numeric_conversion_is_visible_to_e3_and_supports_cwe_681() -> None:
+    candidate = _analyze(
+        "void *risky(long n) { return malloc((unsigned short)n); }"
+    )
+    evidence = next(
+        item for item in candidate.evidence if item.kind == "numeric_conversion"
+    )
+    context = ContextBuilder().build(candidate, ExpertFamily.INTEGER_SIZE_TYPE)
+    finding = Finding(
+        finding_id="finding-numeric-conversion",
+        candidate_id=candidate.candidate_id,
+        expert=ExpertFamily.INTEGER_SIZE_TYPE,
+        title="numeric truncation",
+        root_cause="long value is narrowed before allocation",
+        consequence="undersized allocation",
+        file=candidate.file,
+        function=candidate.function,
+        line_start=evidence.line,
+        line_end=evidence.line,
+        cwes=["CWE-681"],
+        source="n",
+        sink="malloc",
+        missing_guard=None,
+        trigger_path=["n", "(unsigned short)n", "malloc"],
+        evidence_ids=[evidence.evidence_id],
+        confidence=0.9,
+    )
+
+    assert "numeric_conversion" in context.evidence_text
+    result = EvidenceValidator().validate(finding, candidate)
+    assert result.verdict == ValidationVerdict.VALIDATED
+    assert result.checks["cwe_semantics_supported"] is True
+
+
+def test_unchecked_call_result_is_visible_to_e5_and_supports_cwe_252() -> None:
+    candidate = _analyze("void risky(int fd, char *b) { read(fd, b, 8); use(b); }")
+    evidence = next(
+        item for item in candidate.evidence if item.kind == "unchecked_call_result"
+    )
+    context = ContextBuilder().build(candidate, ExpertFamily.CONTROL_STATE_ERROR)
+    finding = Finding(
+        finding_id="finding-unchecked-result",
+        candidate_id=candidate.candidate_id,
+        expert=ExpertFamily.CONTROL_STATE_ERROR,
+        title="unchecked call result",
+        root_cause="read failure is not checked",
+        consequence="invalid state reaches later processing",
+        file=candidate.file,
+        function=candidate.function,
+        line_start=evidence.line,
+        line_end=evidence.line,
+        cwes=["CWE-252"],
+        source=None,
+        sink="use",
+        missing_guard="read result check",
+        trigger_path=["read", "use"],
+        evidence_ids=[evidence.evidence_id],
+        confidence=0.9,
+    )
+
+    assert "unchecked_call_result" in context.evidence_text
+    assert any(item.cwe == "CWE-252" for item in candidate.cwe_hypotheses)
+    result = EvidenceValidator().validate(finding, candidate)
+    assert result.verdict == ValidationVerdict.VALIDATED
+    assert result.checks["cwe_semantics_supported"] is True
 
 
 def test_anchor_router_rejects_pre_cwe_feature_schema() -> None:
@@ -152,7 +229,7 @@ def test_anchor_router_rejects_pre_cwe_feature_schema() -> None:
     candidate.feature_schema_version = "semantic-v1"
     sample = RouterSample(candidate, [ExpertFamily.MEMORY_SAFETY])
 
-    with pytest.raises(ValueError, match="semantic-cwe-v2"):
+    with pytest.raises(ValueError, match="semantic-cwe-v3"):
         AnchorRareRouter.fit([sample])
 
 

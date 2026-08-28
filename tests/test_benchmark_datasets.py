@@ -163,7 +163,7 @@ def _router_sample(candidate_id: str, project_id: str) -> RouterSample:
             "",
             [],
             {"cwe_memory_score": 1.0},
-            feature_schema_version="semantic-cwe-v2",
+            feature_schema_version="semantic-cwe-v3",
         ),
         [ExpertFamily.MEMORY_BOUNDS],
     )
@@ -187,7 +187,7 @@ def test_merge_router_splits_reuses_compact_frozen_features(tmp_path: Path) -> N
 
     manifest = merge_router_split_directories(inputs, tmp_path / "router-merged")
 
-    assert manifest["feature_schema"] == "semantic-cwe-v2"
+    assert manifest["feature_schema"] == "semantic-cwe-v3"
     assert manifest["sample_count"] == 6
     assert len(
         load_router_samples_jsonl(tmp_path / "router-merged" / "router_train.jsonl")

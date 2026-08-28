@@ -7,6 +7,7 @@ from .api_semantics import ApiCatalog
 from .cwe_hypotheses import StaticCweHypothesisEngine
 from .evidence_normalizer import SemanticEvidenceNormalizer
 from .features import SemanticFeatureExtractor
+from .interprocedural import build_related_function_summaries
 from .semantic_analyzer import SemanticProgramAnalysis
 from .suspicion import SuspicionScorer
 
@@ -72,6 +73,10 @@ class SemanticCandidateBuilder:
                     callees=callees,
                     feature_schema_version=self.feature_extractor.schema_version,
                     cwe_hypotheses=cwe_hypotheses,
+                    related_functions=build_related_function_summaries(
+                        analysis, function_key
+                    ),
+                    symbol_types=dict(function.symbol_types),
                 )
             )
         return sorted(
@@ -101,6 +106,7 @@ class SemanticCandidateBuilder:
             | set(self.catalog.releases)
             | set(self.catalog.taint_sources)
             | set(self.catalog.taint_sinks)
+            | set(self.catalog.status_returns)
             | set(self.catalog.thread_spawn)
             | set(self.catalog.lock_acquire)
             | set(self.catalog.lock_release)

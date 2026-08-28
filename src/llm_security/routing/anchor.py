@@ -55,8 +55,8 @@ class AnchorRareRouter:
     as mutually exclusive classes.
     """
 
-    artifact_version = 2
-    required_feature_schema_version = "semantic-cwe-v2"
+    artifact_version = 3
+    required_feature_schema_version = "semantic-cwe-v3"
 
     def __init__(
         self,
@@ -65,7 +65,7 @@ class AnchorRareRouter:
         anchors: tuple[ExpertFamily, ...] = DEFAULT_ANCHORS,
         threshold: float = 0.5,
         thresholds: dict[ExpertFamily, float] | None = None,
-        feature_schema_version: str = "semantic-cwe-v2",
+        feature_schema_version: str = "semantic-cwe-v3",
     ) -> None:
         if not anchors:
             raise ValueError("AnchorRareRouter requires at least one anchor Expert")
@@ -112,7 +112,7 @@ class AnchorRareRouter:
             )
         if schemas != {cls.required_feature_schema_version}:
             raise ValueError(
-                "Anchor/Rare Router v2 requires static CWE hypothesis features with "
+                "Anchor/Rare Router v3 requires static CWE hypothesis features with "
                 f"schema={cls.required_feature_schema_version}; rerun phase2e-prepare."
             )
         anchor_set = set(anchors)

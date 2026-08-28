@@ -178,7 +178,7 @@ def test_mlp_backend_does_not_fit_hidden_logistic_regression(monkeypatch) -> Non
             code="int f(void) { return 0; }",
             evidence=[],
             features={"bias": 1.0, "x": float(candidate_index)},
-            feature_schema_version="semantic-cwe-v2",
+            feature_schema_version="semantic-cwe-v3",
         )
         for expert_index, assignment in enumerate(assignments):
             rows.append(
@@ -188,7 +188,7 @@ def test_mlp_backend_does_not_fit_hidden_logistic_regression(monkeypatch) -> Non
                     success=(candidate_index + expert_index) % 3 == 0,
                     truth_labels_available=True,
                     case_id=f"case-{candidate_index}",
-                    label_version="semantic-causal-v1",
+                    label_version="semantic-causal-v2",
                 )
             )
 

@@ -7,8 +7,11 @@ from .api_semantics import (
     SanitizerSpec,
     SinkSpec,
     SourceSpec,
+    StatusReturnSpec,
 )
 from .candidate_builder import SemanticCandidateBuilder
+from .candidate_ranker import LearnedCandidateRanker
+from .interprocedural import build_related_function_summaries
 from .control_flow import (
     CFGNode,
     ControlFlowBuilder,
@@ -31,6 +34,7 @@ from .evidence_normalizer import SemanticEvidenceNormalizer
 from .features import (
     FACT_FEATURE_MAP,
     FEATURE_SCHEMA_SEMANTIC_CWE_V2,
+    FEATURE_SCHEMA_SEMANTIC_CWE_V3,
     FEATURE_SCHEMA_SEMANTIC_V1,
     SemanticFeatureExtractor,
 )
@@ -86,12 +90,15 @@ __all__ = [
     "ExpressionInfo",
     "FACT_FEATURE_MAP",
     "FEATURE_SCHEMA_SEMANTIC_CWE_V2",
+    "FEATURE_SCHEMA_SEMANTIC_CWE_V3",
     "FEATURE_SCHEMA_SEMANTIC_V1",
     "FunctionIR",
     "FunctionAnalysis",
     "FunctionAnalysisIndex",
     "GuardRelation",
     "LegacyRegexAnalyzer",
+    "LearnedCandidateRanker",
+    "build_related_function_summaries",
     "MemoryAccess",
     "MemoryCopySpec",
     "ProgramIR",
@@ -114,6 +121,7 @@ __all__ = [
     "StatementIR",
     "StructuralAnalyzer",
     "SourceSpec",
+    "StatusReturnSpec",
     "SuspicionScorer",
     "TaintAnalyzer",
     "TaintPath",

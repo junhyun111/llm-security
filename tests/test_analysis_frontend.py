@@ -24,6 +24,10 @@ void parse(char *buf, size_t len) {
     function = program.functions["parse"]
 
     assert function.parameters == ["buf", "len"]
+    assert function.symbol_types["buf"] == "char *"
+    assert function.symbol_types["len"] == "size_t"
+    assert function.symbol_types["n"] == "size_t"
+    assert function.symbol_types["dst"] == "char *"
     assignments = {item.target: item for item in function.assignments}
     assert assignments["n"].expression == "len * 4"
     assert assignments["n"].defs == {"n"}
@@ -36,9 +40,11 @@ void parse(char *buf, size_t len) {
     assert calls["malloc"].arguments == ["n"]
     assert calls["malloc"].argument_symbols == [{"n"}]
     assert calls["malloc"].assigned_to == "dst"
+    assert calls["malloc"].result_usage == "assigned"
     assert calls["memcpy"].arguments == ["dst", "buf", "len"]
     assert calls["memcpy"].argument_symbols == [{"dst"}, {"buf"}, {"len"}]
     assert calls["helper"].arguments == ["n"]
+    assert calls["helper"].result_usage == "discarded"
 
     allocation = next(
         statement for statement in function.statements if "malloc(n)" in statement.text

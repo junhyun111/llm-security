@@ -11,13 +11,15 @@ from .models import (
     Evidence,
     ExpertAssignment,
     ExpertFamily,
+    Finding,
     GroundTruth,
     ProjectCase,
+    RelatedFunctionSummary,
     to_dict,
 )
 
 
-UTILITY_OUTCOME_LABEL_VERSION = "semantic-causal-v1"
+UTILITY_OUTCOME_LABEL_VERSION = "semantic-causal-v2"
 
 
 @dataclass(slots=True)
@@ -47,6 +49,7 @@ class UtilitySample:
     validated_true_findings: int = 0
     validated_false_findings: int = 0
     rejected_findings: int = 0
+    uncertain_findings: int = 0
 
     def reward(
         self,
@@ -221,6 +224,7 @@ def load_utility_samples_jsonl(path: str | Path) -> list[UtilitySample]:
                             raw.get("validated_false_findings", 0)
                         ),
                         rejected_findings=int(raw.get("rejected_findings", 0)),
+                        uncertain_findings=int(raw.get("uncertain_findings", 0)),
                     )
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
@@ -262,6 +266,7 @@ def utility_sample_to_dict(sample: UtilitySample) -> dict:
         "validated_true_findings": sample.validated_true_findings,
         "validated_false_findings": sample.validated_false_findings,
         "rejected_findings": sample.rejected_findings,
+        "uncertain_findings": sample.uncertain_findings,
     }
 
 
@@ -294,6 +299,71 @@ def candidate_from_dict(item: dict) -> Candidate:
         callees=[str(value) for value in item.get("callees", [])],
         feature_schema_version=str(item.get("feature_schema_version", "legacy-v1")),
         cwe_hypotheses=_cwe_hypotheses_from_raw(item),
+        related_functions=[
+            RelatedFunctionSummary(
+                relation=str(summary["relation"]),
+                function_key=str(summary.get("function_key", summary["function"])),
+                file=str(summary["file"]),
+                function=str(summary["function"]),
+                line_start=int(summary["line_start"]),
+                line_end=int(summary["line_end"]),
+                parameters=[str(value) for value in summary.get("parameters", [])],
+                calls=[str(value) for value in summary.get("calls", [])],
+                semantic_facts=[
+                    str(value) for value in summary.get("semantic_facts", [])
+                ],
+                code=str(summary.get("code", "")),
+                symbol_types={
+                    str(key): str(value)
+                    for key, value in summary.get("symbol_types", {}).items()
+                },
+            )
+            for summary in item.get("related_functions", [])
+        ],
+        symbol_types={
+            str(key): str(value)
+            for key, value in item.get("symbol_types", {}).items()
+        },
+    )
+
+
+def finding_from_dict(item: dict) -> Finding:
+    """Restore a serialized finding from checkpoint/detection JSON.
+
+    Detection diagnostics intentionally operate on the raw Expert findings saved
+    before validation.  Keeping restoration here avoids each consumer silently
+    implementing a slightly different interpretation of the wire format.
+    """
+    return Finding(
+        finding_id=str(item["finding_id"]),
+        candidate_id=str(item["candidate_id"]),
+        expert=ExpertFamily(item["expert"]),
+        title=str(item["title"]),
+        root_cause=str(item["root_cause"]),
+        consequence=str(item["consequence"]),
+        file=str(item["file"]),
+        function=str(item["function"]),
+        line_start=int(item["line_start"]),
+        line_end=int(item["line_end"]),
+        cwes=[str(value) for value in item.get("cwes", [])],
+        source=item.get("source"),
+        sink=item.get("sink"),
+        missing_guard=item.get("missing_guard"),
+        trigger_path=[str(value) for value in item.get("trigger_path", [])],
+        evidence_ids=[str(value) for value in item.get("evidence_ids", [])],
+        confidence=float(item["confidence"]),
+        preconditions=[str(value) for value in item.get("preconditions", [])],
+        evidence_for=[str(value) for value in item.get("evidence_for", [])],
+        evidence_against=[str(value) for value in item.get("evidence_against", [])],
+        falsification_test=item.get("falsification_test"),
+        model_id=item.get("model_id"),
+        prompt_version=item.get("prompt_version"),
+        supporting_experts=[
+            ExpertFamily(value) for value in item.get("supporting_experts", [])
+        ],
+        supporting_models=[
+            str(value) for value in item.get("supporting_models", [])
+        ],
     )
 
 

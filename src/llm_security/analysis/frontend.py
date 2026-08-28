@@ -143,6 +143,7 @@ class TreeSitterFrontend:
             for parameter in [_defined_symbol(parameter_node, source)]
             if parameter
         ]
+        symbol_types = _symbol_types(nodes, source)
 
         assignments: list[Assignment] = []
         assignment_nodes = [
@@ -240,6 +241,7 @@ class TreeSitterFrontend:
                     if item.type == node_type
                 }
             ),
+            symbol_types=symbol_types,
         )
 
 
@@ -295,6 +297,61 @@ def _defined_symbol(node: Node, source: bytes) -> str | None:
     declarator = node.child_by_field_name("declarator")
     identifiers = _identifier_texts(declarator or node, source)
     return identifiers[-1] if identifiers else None
+
+
+def _symbol_types(nodes: list[Node], source: bytes) -> dict[str, str]:
+    """Collect explicit parameter/local declaration types without guessing."""
+    result: dict[str, str] = {}
+    declaration_nodes = [
+        node
+        for node in nodes
+        if node.type in {"parameter_declaration", "declaration"}
+    ]
+    for declaration in declaration_nodes:
+        type_node = declaration.child_by_field_name("type")
+        if type_node is None:
+            type_node = next(
+                (
+                    child
+                    for child in declaration.named_children
+                    if child.type
+                    in {
+                        "primitive_type",
+                        "sized_type_specifier",
+                        "type_identifier",
+                        "struct_specifier",
+                        "enum_specifier",
+                    }
+                ),
+                None,
+            )
+        declared_type = _text(type_node, source).strip()
+        if not declared_type:
+            continue
+        declarators = []
+        if declaration.type == "parameter_declaration":
+            declarator = declaration.child_by_field_name("declarator")
+            if declarator is not None:
+                declarators.append(declarator)
+        else:
+            declarators.extend(
+                child
+                for child in declaration.named_children
+                if child is not type_node
+                and (
+                    child.type == "identifier"
+                    or child.type == "init_declarator"
+                    or "declarator" in child.type
+                )
+            )
+        for declarator in declarators:
+            symbol = _defined_symbol(declarator, source)
+            if symbol:
+                pointer_suffix = " *" if "pointer_declarator" in {
+                    node.type for node in _walk(declarator)
+                } else ""
+                result[symbol] = (declared_type + pointer_suffix).strip()
+    return dict(sorted(result.items()))
 
 
 def _identifier_texts(node: Node, source: bytes) -> list[str]:
@@ -681,6 +738,7 @@ def _call_site(
         assigned_to=_assigned_target(node, source),
         span=_span(node, file),
         text=_text(node, source).strip(),
+        result_usage=_call_result_usage(node),
     )
 
 
@@ -699,6 +757,33 @@ def _assigned_target(node: Node, source: bytes) -> str | None:
             return _defined_symbol(declarator or current, source)
         current = current.parent
     return None
+
+
+def _call_result_usage(node: Node) -> str:
+    """Describe how the value produced by a call expression is consumed."""
+    current = node.parent
+    while current is not None:
+        if current.type in {"assignment_expression", "init_declarator"}:
+            return "assigned"
+        if current.type in {
+            "if_statement",
+            "while_statement",
+            "do_statement",
+            "for_statement",
+            "switch_statement",
+            "conditional_expression",
+        }:
+            return "condition"
+        if current.type == "return_statement":
+            return "returned"
+        if current.type == "argument_list":
+            return "argument"
+        if current.type == "expression_statement":
+            return "discarded" if current.named_child_count == 1 else "expression"
+        if current.type in {"declaration", "compound_statement"}:
+            break
+        current = current.parent
+    return "expression"
 
 
 def _condition(

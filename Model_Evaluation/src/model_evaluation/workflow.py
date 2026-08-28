@@ -37,6 +37,36 @@ def resolve_models(env_file: str | Path, models: Iterable[str] = ()) -> list[str
     return [config.model.expert_model]
 
 
+def _outcome_case_contract(
+    model_id, assignments, candidates, validator_confidence_thresholds
+) -> dict[str, object]:
+    return {
+        "version": "batched-outcome-contract-v2",
+        "model_id": model_id,
+        "assignment_ids": sorted(item.assignment_id for item in assignments),
+        "candidate_ids": sorted(item.candidate_id for item in candidates),
+        "feature_schemas": sorted(
+            {item.feature_schema_version for item in candidates}
+        ),
+        "validator_confidence_thresholds": dict(
+            sorted(validator_confidence_thresholds.items())
+        ),
+    }
+
+
+def _case_file_matches_contract(
+    path: str | Path, expected: dict[str, object]
+) -> bool:
+    source = Path(path)
+    if not source.is_file():
+        return False
+    try:
+        stored = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return stored.get("contract") == expected
+
+
 def plan_outcome_matrix(
     *,
     cases_path: str | Path,
@@ -107,6 +137,7 @@ def collect_outcome_matrix(
     max_case_attempts: int = 6,
     retry_base_seconds: float = 1.0,
     retry_max_seconds: float = 60.0,
+    validator_minimum_confidence_by_expert: dict[str, float] | None = None,
     progress: Callable[[str], None] | None = print,
 ) -> dict[str, object]:
     """Collect one batched Expert completion per case through a bounded async pool."""
@@ -145,7 +176,14 @@ def collect_outcome_matrix(
         max_batch_characters=max_batch_characters,
         max_tasks=len(experts) * max_candidates_per_case,
     )
-    validator = EvidenceValidator(use_llm_for_uncertain=False)
+    validator = EvidenceValidator(
+        use_llm_for_uncertain=False,
+        minimum_confidence_by_expert=validator_minimum_confidence_by_expert,
+    )
+    validator_thresholds = {
+        expert.value: validator.confidence_threshold_for(expert)
+        for expert in experts
+    }
     matcher = FindingTruthMatcher()
     if max_concurrency < 1 or max_concurrency > 1_000:
         raise ValueError("max_concurrency must be between 1 and 1000")
@@ -162,22 +200,26 @@ def collect_outcome_matrix(
     for case in cases:
         candidates = analyzer.analyze(case)
         case_file = case_directory / f"{case.case_id}.json"
-        if case_file.is_file():
-            completed_cases += 1
-            continue
         selected = select_matrix_candidates(
             candidates,
             case.ground_truth,
             max_candidates=max_candidates_per_case,
             hard_negatives=hard_negatives_per_case,
         )
+        contract = _outcome_case_contract(
+            model_id, assignments, selected, validator_thresholds
+        )
+        if _case_file_matches_contract(case_file, contract):
+            completed_cases += 1
+            continue
         if selected:
-            work_items.append((case, selected, case_file))
+            work_items.append((case, selected, case_file, contract))
             continue
         write_json(
             case_file,
             {
                 "case_id": case.case_id,
+                "contract": contract,
                 "physical_api_requests": 0,
                 "logical_expert_outcomes": 0,
                 "rows": [],
@@ -188,7 +230,7 @@ def collect_outcome_matrix(
         completed_cases += 1
 
     def process_case(item):
-        case, selected, case_file = item
+        case, selected, case_file, contract = item
         routes = [
             RouteDecision(
                 candidate_id=candidate.candidate_id,
@@ -218,6 +260,7 @@ def collect_outcome_matrix(
         }
         accepted: dict[tuple[str, object], list] = {}
         rejected: dict[tuple[str, object], int] = {}
+        uncertain: dict[tuple[str, object], int] = {}
         validations = []
         for finding in output.findings:
             candidate = candidates_by_id[finding.candidate_id]
@@ -226,8 +269,10 @@ def collect_outcome_matrix(
             validations.append(validation)
             if validation.verdict.value == "validated":
                 accepted.setdefault(key, []).append(finding)
-            else:
+            elif validation.verdict.value == "rejected":
                 rejected[key] = rejected.get(key, 0) + 1
+            else:
+                uncertain[key] = uncertain.get(key, 0) + 1
         rows: list[dict] = []
         for candidate in selected:
             truths = [
@@ -272,6 +317,7 @@ def collect_outcome_matrix(
                     validated_true_findings=true_count,
                     validated_false_findings=false_count,
                     rejected_findings=rejected.get(key, 0),
+                    uncertain_findings=uncertain.get(key, 0),
                 )
                 rows.append(utility_sample_to_dict(sample))
         matched_by_finding = {
@@ -309,6 +355,7 @@ def collect_outcome_matrix(
             case_file,
             {
                 "case_id": case.case_id,
+                "contract": contract,
                 "physical_api_requests": 1,
                 "logical_expert_outcomes": len(rows),
                 "rows": rows,
@@ -1005,6 +1052,17 @@ def evaluate_utility_router(
         max_candidates_per_case=max_candidates_per_case,
     )
     macro_end_to_end = _macro_expected_expert_metrics(per_expert_end_to_end)
+    detection_path = Path(test_outcomes).with_suffix(".detections.jsonl")
+    stage_diagnostics = None
+    if detection_path.is_file():
+        from .diagnostics import audit_detection_stages
+
+        stage_diagnostics = audit_detection_stages(
+            cases_path=test_cases,
+            candidate_cache=candidate_cache,
+            detection_path=detection_path,
+            max_candidates_per_case=max_candidates_per_case,
+        )
     report = {
         "artifact": str(Path(artifact_path).resolve()),
         "test_outcomes": str(Path(test_outcomes).resolve()),
@@ -1014,6 +1072,7 @@ def evaluate_utility_router(
         "end_to_end": to_dict(e2e),
         "per_expected_expert_end_to_end": per_expert_end_to_end,
         "macro_expected_expert_end_to_end": macro_end_to_end,
+        "stage_diagnostics": stage_diagnostics,
     }
     write_json(report_path, report)
     return report

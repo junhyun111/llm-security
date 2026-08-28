@@ -1,5 +1,5 @@
 from llm_security.analysis import (
-    FEATURE_SCHEMA_SEMANTIC_CWE_V2,
+    FEATURE_SCHEMA_SEMANTIC_CWE_V3,
     SemanticStaticAnalyzer,
 )
 from llm_security.models import ProjectCase
@@ -21,15 +21,25 @@ def test_uaf_and_arithmetic_facts_become_fixed_features() -> None:
 
     assert uaf.features["use_after_release_count"] == 1.0
     assert arithmetic.features["arithmetic_to_memory_sink_count"] == 1.0
+    assert arithmetic.features["integer_arithmetic_count"] == 1.0
+
+
+def test_control_state_facts_become_v3_features() -> None:
+    unchecked = _candidate("void f(int fd, char *b) { read(fd, b, 8); use(b); }")
+    state = _candidate("void f(int value) { int state = value; use(state); }")
+
+    assert unchecked.features["unchecked_call_result_count"] == 1.0
+    assert unchecked.features["cwe_252_score"] > 0.0
+    assert state.features["state_transition_count"] == 1.0
 
 
 def test_semantic_feature_schema_is_complete_and_zero_filled() -> None:
     candidate = _candidate("void f(int n) { char *p = malloc(n); consume(p); }")
 
-    assert tuple(candidate.features) == FEATURE_SCHEMA_SEMANTIC_CWE_V2
+    assert tuple(candidate.features) == FEATURE_SCHEMA_SEMANTIC_CWE_V3
     assert candidate.features["double_release_count"] == 0.0
     assert candidate.features["source_to_sink_count"] == 0.0
-    assert candidate.feature_schema_version == "semantic-cwe-v2"
+    assert candidate.feature_schema_version == "semantic-cwe-v3"
 
 
 def test_same_source_produces_identical_features() -> None:
