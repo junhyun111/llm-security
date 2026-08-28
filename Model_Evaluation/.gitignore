@@ -9,3 +9,23 @@
 __pycache__/
 *.py[cod]
 
+# Reusable evaluation inputs are intentionally versioned.  These are required
+# after cloning the repository; the Juliet source dataset itself stays local.
+/artifacts/**
+!/artifacts/
+!/artifacts/**/
+!/artifacts/**/*.pkl
+/results/**
+!/results/
+!/results/**/
+!/results/**/*.json
+
+# Do not accidentally commit large/generated result payloads.
+/results/**/*.jsonl
+/results/**/*.csv
+/results/**/*.sqlite
+/results/**/*.db
+/results/**/*.parquet
+/results/**/*.pkl
+/results/**/*.pt
+
