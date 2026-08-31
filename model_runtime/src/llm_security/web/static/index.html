@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Security Review</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark">LS</div>
+    <div>
+      <p class="eyebrow">EVIDENCE-GROUNDED REVIEW</p>
+      <h1>LLM Security Review</h1>
+    </div>
+    <div class="system-state"><span></span> Local analyzer ready</div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">C / C++ PROJECT SECURITY</p>
+        <h2>프로젝트 전체를 살피고<br>근거가 있는 취약점만 검토하세요.</h2>
+        <p class="lead">정적 분석과 Router가 여러 보안 전문가의 작업을 구성하고, 하나의 통합 LLM 호출로 분석합니다. 탐지 결과를 확인한 뒤 선택한 취약점을 한 번의 통합 패치 호출로 수정할 수 있습니다.</p>
+      </div>
+      <div class="privacy-note">
+        <strong>원본 불변 원칙</strong>
+        <p>업로드 원본은 수정하지 않습니다. DB와 바이너리는 보관만 하며, LLM에는 C/C++ 후보 코드와 정적 근거만 전달합니다.</p>
+      </div>
+    </section>
+
+    <section class="panel upload-panel" id="upload-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="step">STEP 01</p>
+          <h3>프로젝트 폴더 업로드</h3>
+        </div>
+        <span class="support">C · C++ · Headers</span>
+      </div>
+      <label class="drop-zone" for="folder-input" id="drop-zone">
+        <input id="folder-input" type="file" webkitdirectory directory multiple>
+        <span class="upload-icon">↑</span>
+        <strong>분석할 프로젝트 폴더를 선택하세요</strong>
+        <span>소스, 빌드 파일, DB가 포함된 폴더 전체를 선택할 수 있습니다.</span>
+      </label>
+      <div class="selection" id="selection" hidden>
+        <div>
+          <strong id="selected-name"></strong>
+          <span id="selected-meta"></span>
+        </div>
+        <button class="primary" id="start-button">분석 시작</button>
+      </div>
+      <p class="error" id="upload-error" hidden></p>
+    </section>
+
+    <section class="panel status-panel" id="status-panel" hidden>
+      <div class="panel-heading">
+        <div>
+          <p class="step">STEP 02</p>
+          <h3 id="status-title">분석 진행 중</h3>
+        </div>
+        <span class="status-pill" id="status-pill">QUEUED</span>
+      </div>
+      <div class="progress-track"><div id="progress-bar"></div></div>
+      <div class="progress-copy">
+        <span id="status-message"></span>
+        <strong id="progress-value">0%</strong>
+      </div>
+      <p class="error" id="job-error" hidden></p>
+    </section>
+
+    <section id="results" hidden>
+      <div class="results-heading">
+        <div>
+          <p class="eyebrow">ANALYSIS COMPLETE</p>
+          <h2>보안 검토 결과</h2>
+        </div>
+        <a class="secondary" id="download-link">검토된 프로젝트 다운로드</a>
+      </div>
+      <div class="metrics" id="metrics"></div>
+      <div class="filter-row">
+        <strong>탐지 내역</strong>
+        <div>
+          <button class="filter active" data-filter="all">전체</button>
+          <button class="filter" data-filter="validated">검증됨</button>
+          <button class="filter" data-filter="uncertain">불확실</button>
+          <button class="filter" data-filter="rejected">기각됨</button>
+        </div>
+      </div>
+
+      <section class="batch-toolbar" id="batch-toolbar">
+        <div>
+          <strong>통합 패치</strong>
+          <span id="selection-count">선택된 취약점 0개</span>
+        </div>
+        <button class="primary" id="batch-proposal-button" disabled>선택 취약점 수정안 생성 · API 1회</button>
+      </section>
+      <section class="batch-patch-panel" id="batch-patch-panel" hidden>
+        <div class="panel-heading">
+          <div>
+            <p class="step">PATCH REVIEW</p>
+            <h3 id="batch-patch-title">통합 수정안</h3>
+          </div>
+          <span class="status-pill" id="batch-patch-status"></span>
+        </div>
+        <p id="batch-patch-summary"></p>
+        <pre id="batch-patch-diff"></pre>
+        <div class="batch-actions" id="batch-actions"></div>
+      </section>
+      <div id="findings" class="findings"></div>
+    </section>
+  </main>
+
+  <template id="finding-template">
+    <article class="finding-card">
+      <div class="finding-head">
+        <div>
+          <div class="badges"></div>
+          <h3 class="finding-title"></h3>
+          <p class="location"></p>
+        </div>
+        <div class="confidence"></div>
+      </div>
+      <div class="finding-grid">
+        <div><span>근본 원인</span><p class="root-cause"></p></div>
+        <div><span>영향</span><p class="consequence"></p></div>
+      </div>
+      <details>
+        <summary>근거와 반증 검토 보기</summary>
+        <div class="evidence-block"></div>
+      </details>
+      <div class="patch-area"></div>
+    </article>
+  </template>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "format_version": 1,
+  "router": {
+    "file": "router.pkl",
+    "replaceable": true,
+    "validation_command": "run inspect"
+  },
+  "candidate_ranker": {
+    "file": "candidate_ranker.pkl",
+    "backend": "small_mlp",
+    "feature_schema": "semantic-cwe-v3",
+    "sha256": "e77e98da69137e5a87118430f59b2be6fcca408614ac0a81156eab1078ee9a98"
+  },
+  "note": "inspect calculates metadata and SHA-256 from the active router.pkl"
+}

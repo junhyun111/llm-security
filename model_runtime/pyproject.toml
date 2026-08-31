@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-security-runtime"
+version = "0.1.0"
+description = "Deployment wrapper for the trained llm-security Utility Router"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27,<1",
+  "numpy>=1.26",
+  "scikit-learn>=1.5",
+  "torch>=2.8",
+  "tree-sitter>=0.25,<0.26",
+  "tree-sitter-c>=0.24,<0.25",
+  "tree-sitter-cpp>=0.23,<0.24",
+  "fastapi>=0.115,<1",
+  "python-multipart>=0.0.9,<1",
+  "uvicorn>=0.30,<1",
+]
+
+[project.scripts]
+llm-security-runtime = "llm_security_runtime.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+llm_security = ["web/static/*"]
