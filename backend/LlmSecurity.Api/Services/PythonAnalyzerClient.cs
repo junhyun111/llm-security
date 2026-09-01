@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 
 namespace LlmSecurity.Api.Services;
@@ -7,10 +9,14 @@ namespace LlmSecurity.Api.Services;
 public class PythonAnalyzerClient
 {
     private readonly HttpClient _http;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public PythonAnalyzerClient(HttpClient http)
+    public PythonAnalyzerClient(
+        HttpClient http,
+        IHttpContextAccessor httpContextAccessor)
     {
         _http = http;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<bool> IsHealthyAsync(CancellationToken cancellationToken = default)
@@ -26,24 +32,55 @@ public class PythonAnalyzerClient
         }
     }
 
+    public async Task<string> GetRuntimeMetadataJsonAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _http.GetAsync("/api/runtime", cancellationToken);
+        await EnsureSuccess(response, cancellationToken);
+        return await response.Content.ReadAsStringAsync(cancellationToken);
+    }
+
     public async Task<PythonJobDto> CreateJobAsync(
         string projectName,
         IReadOnlyList<IFormFile> files,
         IReadOnlyList<string> relativePaths,
         CancellationToken cancellationToken = default)
     {
+        var requestOptions = await ReadRequestOptionsAsync(cancellationToken);
+
         using var content = new MultipartFormDataContent();
-        content.Add(new StringContent(projectName), "project_name");
+        content.Add(new StringContent(projectName, Encoding.UTF8), "project_name");
+        content.Add(
+            new StringContent(
+                requestOptions.Sensitivity.ToString(CultureInfo.InvariantCulture),
+                Encoding.UTF8),
+            "sensitivity");
+
+        if (!string.IsNullOrWhiteSpace(requestOptions.Model))
+        {
+            content.Add(
+                new StringContent(requestOptions.Model, Encoding.UTF8),
+                "model");
+        }
+
+        if (!string.IsNullOrWhiteSpace(requestOptions.ApiKey))
+        {
+            content.Add(
+                new StringContent(requestOptions.ApiKey, Encoding.UTF8),
+                "api_key");
+        }
 
         for (var i = 0; i < files.Count; i++)
         {
-            content.Add(new StringContent(relativePaths[i]), "relative_paths");
+            content.Add(new StringContent(relativePaths[i], Encoding.UTF8), "relative_paths");
 
             var file = files[i];
             var streamContent = new StreamContent(file.OpenReadStream());
             if (!string.IsNullOrWhiteSpace(file.ContentType))
+            {
                 streamContent.Headers.ContentType =
                     new System.Net.Http.Headers.MediaTypeHeaderValue(file.ContentType);
+            }
 
             content.Add(streamContent, "files", file.FileName);
         }
@@ -123,11 +160,67 @@ public class PythonAnalyzerClient
             cancellationToken);
 
         if (!response.IsSuccessStatusCode)
-        {
             await EnsureSuccess(response, cancellationToken);
-        }
 
         return response;
+    }
+
+    private async Task<AnalysisRequestOptions> ReadRequestOptionsAsync(
+        CancellationToken cancellationToken)
+    {
+        var sensitivity = 0.5;
+        string? model = null;
+        string? apiKey = null;
+
+        var request = _httpContextAccessor.HttpContext?.Request;
+        if (request?.HasFormContentType != true)
+            return new AnalysisRequestOptions(sensitivity, model, apiKey);
+
+        var form = await request.ReadFormAsync(cancellationToken);
+
+        var rawSensitivity = form["sensitivity"].ToString().Trim();
+        if (!string.IsNullOrWhiteSpace(rawSensitivity))
+        {
+            if (!double.TryParse(
+                    rawSensitivity,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out sensitivity) ||
+                sensitivity < 0.0 ||
+                sensitivity > 1.0)
+            {
+                throw new AnalyzerApiException(
+                    HttpStatusCode.BadRequest,
+                    "민감도는 0.0에서 1.0 사이여야 합니다.");
+            }
+        }
+
+        model = NormalizeOptional(form["model"].ToString());
+        if (model is { Length: > 200 } ||
+            model?.Contains('\r') == true ||
+            model?.Contains('\n') == true)
+        {
+            throw new AnalyzerApiException(
+                HttpStatusCode.BadRequest,
+                "유효하지 않은 모델 ID입니다.");
+        }
+
+        apiKey = NormalizeOptional(form["api_key"].ToString());
+        if (apiKey is { Length: > 512 } ||
+            apiKey?.Any(char.IsWhiteSpace) == true)
+        {
+            throw new AnalyzerApiException(
+                HttpStatusCode.BadRequest,
+                "유효하지 않은 OpenRouter API Key 형식입니다.");
+        }
+
+        return new AnalysisRequestOptions(sensitivity, model, apiKey);
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private static async Task EnsureSuccess(
@@ -144,9 +237,15 @@ public class PythonAnalyzerClient
         {
             using var doc = JsonDocument.Parse(body);
             if (doc.RootElement.TryGetProperty("detail", out var detail))
+            {
                 message = detail.ValueKind == JsonValueKind.String
                     ? detail.GetString() ?? body
                     : detail.GetRawText();
+            }
+            else if (doc.RootElement.TryGetProperty("message", out var apiMessage))
+            {
+                message = apiMessage.GetString() ?? body;
+            }
         }
         catch (JsonException)
         {
@@ -155,6 +254,11 @@ public class PythonAnalyzerClient
 
         throw new AnalyzerApiException(response.StatusCode, message);
     }
+
+    private sealed record AnalysisRequestOptions(
+        double Sensitivity,
+        string? Model,
+        string? ApiKey);
 }
 
 public sealed class AnalyzerApiException : Exception

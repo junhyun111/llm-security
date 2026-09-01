@@ -11,7 +11,6 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 
 var dbDirectory = Path.GetDirectoryName(
     connectionString.Replace("Data Source=", "", StringComparison.OrdinalIgnoreCase));
-
 if (!string.IsNullOrWhiteSpace(dbDirectory))
     Directory.CreateDirectory(dbDirectory);
 
@@ -22,7 +21,6 @@ builder.Services
     .AddIdentity<AppUser, IdentityRole>(options =>
     {
         options.User.RequireUniqueEmail = true;
-
         options.Password.RequiredLength = 8;
         options.Password.RequireDigit = true;
         options.Password.RequireLowercase = true;
@@ -55,8 +53,10 @@ builder.Services.ConfigureApplicationCookie(options =>
     };
 });
 
-var frontendOrigin = builder.Configuration["Frontend:Origin"] ?? "http://localhost:5173";
+// PythonAnalyzerClient가 현재 분석 요청의 Form 설정값을 안전하게 읽을 수 있게 한다.
+builder.Services.AddHttpContextAccessor();
 
+var frontendOrigin = builder.Configuration["Frontend:Origin"] ?? "http://localhost:5173";
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("frontend", policy =>
@@ -70,7 +70,6 @@ builder.Services.AddCors(options =>
 });
 
 var analyzerBaseUrl = builder.Configuration["Analyzer:BaseUrl"] ?? "http://127.0.0.1:8000";
-
 builder.Services.AddHttpClient<PythonAnalyzerClient>(client =>
 {
     client.BaseAddress = new Uri(analyzerBaseUrl);
@@ -90,7 +89,6 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     await db.Database.EnsureCreatedAsync();
 }
-
 
 app.UseCors("frontend");
 
