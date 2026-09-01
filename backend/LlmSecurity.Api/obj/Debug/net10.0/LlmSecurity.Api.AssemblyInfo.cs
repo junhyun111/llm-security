@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("LlmSecurity.Api")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+d792621f6b90c50db484b7f071af7c859df633b2")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+0ba148148eadb2583c37174611595dc9d22a626b")]
 [assembly: System.Reflection.AssemblyProductAttribute("LlmSecurity.Api")]
 [assembly: System.Reflection.AssemblyTitleAttribute("LlmSecurity.Api")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

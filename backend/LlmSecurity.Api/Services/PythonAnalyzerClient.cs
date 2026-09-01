@@ -49,33 +49,22 @@ public class PythonAnalyzerClient
         var requestOptions = await ReadRequestOptionsAsync(cancellationToken);
 
         using var content = new MultipartFormDataContent();
-        content.Add(new StringContent(projectName, Encoding.UTF8), "project_name");
-        content.Add(
-            new StringContent(
-                requestOptions.Sensitivity.ToString(CultureInfo.InvariantCulture),
-                Encoding.UTF8),
-            "sensitivity");
-
-        if (!string.IsNullOrWhiteSpace(requestOptions.Model))
-        {
-            content.Add(
-                new StringContent(requestOptions.Model, Encoding.UTF8),
-                "model");
-        }
-
-        if (!string.IsNullOrWhiteSpace(requestOptions.ApiKey))
-        {
-            content.Add(
-                new StringContent(requestOptions.ApiKey, Encoding.UTF8),
-                "api_key");
-        }
+        AddRunOptions(
+            content,
+            projectName,
+            requestOptions.Sensitivity,
+            requestOptions.Model,
+            requestOptions.ApiKey);
 
         for (var i = 0; i < files.Count; i++)
         {
-            content.Add(new StringContent(relativePaths[i], Encoding.UTF8), "relative_paths");
+            content.Add(
+                new StringContent(relativePaths[i], Encoding.UTF8),
+                "relative_paths");
 
             var file = files[i];
             var streamContent = new StreamContent(file.OpenReadStream());
+
             if (!string.IsNullOrWhiteSpace(file.ContentType))
             {
                 streamContent.Headers.ContentType =
@@ -85,11 +74,49 @@ public class PythonAnalyzerClient
             content.Add(streamContent, "files", file.FileName);
         }
 
-        using var response = await _http.PostAsync("/api/jobs", content, cancellationToken);
-        await EnsureSuccess(response, cancellationToken);
+        return await SendCreateJobAsync(content, cancellationToken);
+    }
 
-        return (await response.Content.ReadFromJsonAsync<PythonJobDto>(
-            cancellationToken: cancellationToken))!;
+    public async Task<PythonJobDto> CreateJobFromLocalPathAsync(
+        string projectName,
+        IReadOnlyList<LocalProjectFile> files,
+        double sensitivity,
+        string? model,
+        string? apiKey,
+        CancellationToken cancellationToken = default)
+    {
+        if (files.Count == 0)
+            throw new ArgumentException("No local project files were supplied.", nameof(files));
+
+        ValidateRunOptions(ref sensitivity, ref model, ref apiKey);
+
+        using var content = new MultipartFormDataContent();
+        AddRunOptions(
+            content,
+            projectName,
+            sensitivity,
+            model,
+            apiKey);
+
+        foreach (var file in files)
+        {
+            content.Add(
+                new StringContent(file.RelativePath, Encoding.UTF8),
+                "relative_paths");
+
+            var stream = new FileStream(
+                file.FullPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 64 * 1024,
+                options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+            var streamContent = new StreamContent(stream);
+            content.Add(streamContent, "files", file.FileName);
+        }
+
+        return await SendCreateJobAsync(content, cancellationToken);
     }
 
     public async Task<PythonJobDto> GetJobAsync(
@@ -165,6 +192,53 @@ public class PythonAnalyzerClient
         return response;
     }
 
+    private async Task<PythonJobDto> SendCreateJobAsync(
+        MultipartFormDataContent content,
+        CancellationToken cancellationToken)
+    {
+        using var response = await _http.PostAsync(
+            "/api/jobs",
+            content,
+            cancellationToken);
+
+        await EnsureSuccess(response, cancellationToken);
+
+        return (await response.Content.ReadFromJsonAsync<PythonJobDto>(
+            cancellationToken: cancellationToken))!;
+    }
+
+    private static void AddRunOptions(
+        MultipartFormDataContent content,
+        string projectName,
+        double sensitivity,
+        string? model,
+        string? apiKey)
+    {
+        content.Add(
+            new StringContent(projectName, Encoding.UTF8),
+            "project_name");
+
+        content.Add(
+            new StringContent(
+                sensitivity.ToString(CultureInfo.InvariantCulture),
+                Encoding.UTF8),
+            "sensitivity");
+
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            content.Add(
+                new StringContent(model, Encoding.UTF8),
+                "model");
+        }
+
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            content.Add(
+                new StringContent(apiKey, Encoding.UTF8),
+                "api_key");
+        }
+    }
+
     private async Task<AnalysisRequestOptions> ReadRequestOptionsAsync(
         CancellationToken cancellationToken)
     {
@@ -185,9 +259,7 @@ public class PythonAnalyzerClient
                     rawSensitivity,
                     NumberStyles.Float,
                     CultureInfo.InvariantCulture,
-                    out sensitivity) ||
-                sensitivity < 0.0 ||
-                sensitivity > 1.0)
+                    out sensitivity))
             {
                 throw new AnalyzerApiException(
                     HttpStatusCode.BadRequest,
@@ -196,6 +268,26 @@ public class PythonAnalyzerClient
         }
 
         model = NormalizeOptional(form["model"].ToString());
+        apiKey = NormalizeOptional(form["api_key"].ToString());
+
+        ValidateRunOptions(ref sensitivity, ref model, ref apiKey);
+
+        return new AnalysisRequestOptions(sensitivity, model, apiKey);
+    }
+
+    private static void ValidateRunOptions(
+        ref double sensitivity,
+        ref string? model,
+        ref string? apiKey)
+    {
+        if (sensitivity < 0.0 || sensitivity > 1.0)
+        {
+            throw new AnalyzerApiException(
+                HttpStatusCode.BadRequest,
+                "민감도는 0.0에서 1.0 사이여야 합니다.");
+        }
+
+        model = NormalizeOptional(model);
         if (model is { Length: > 200 } ||
             model?.Contains('\r') == true ||
             model?.Contains('\n') == true)
@@ -205,7 +297,7 @@ public class PythonAnalyzerClient
                 "유효하지 않은 모델 ID입니다.");
         }
 
-        apiKey = NormalizeOptional(form["api_key"].ToString());
+        apiKey = NormalizeOptional(apiKey);
         if (apiKey is { Length: > 512 } ||
             apiKey?.Any(char.IsWhiteSpace) == true)
         {
@@ -213,8 +305,6 @@ public class PythonAnalyzerClient
                 HttpStatusCode.BadRequest,
                 "유효하지 않은 OpenRouter API Key 형식입니다.");
         }
-
-        return new AnalysisRequestOptions(sensitivity, model, apiKey);
     }
 
     private static string? NormalizeOptional(string? value)
@@ -236,6 +326,7 @@ public class PythonAnalyzerClient
         try
         {
             using var doc = JsonDocument.Parse(body);
+
             if (doc.RootElement.TryGetProperty("detail", out var detail))
             {
                 message = detail.ValueKind == JsonValueKind.String

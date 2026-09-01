@@ -56,6 +56,9 @@ builder.Services.ConfigureApplicationCookie(options =>
 // PythonAnalyzerClient가 현재 분석 요청의 Form 설정값을 안전하게 읽을 수 있게 한다.
 builder.Services.AddHttpContextAccessor();
 
+// 개발용 "폴더 경로 분석"에서 안전하게 로컬 프로젝트 파일을 수집한다.
+builder.Services.AddSingleton<LocalProjectFileCollector>();
+
 var frontendOrigin = builder.Configuration["Frontend:Origin"] ?? "http://localhost:5173";
 builder.Services.AddCors(options =>
 {

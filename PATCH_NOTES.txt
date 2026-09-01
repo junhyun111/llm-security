@@ -1,0 +1,16 @@
+FINAL WEB PLATFORM PATCH
+
+프로젝트 루트(llm-security)에 압축을 풀고 "모두 덮어쓰기" 하세요.
+
+변경/추가 파일:
+- backend/LlmSecurity.Api/Program.cs                           (덮어쓰기)
+- backend/LlmSecurity.Api/Services/PythonAnalyzerClient.cs    (덮어쓰기)
+- backend/LlmSecurity.Api/Services/LocalProjectFileCollector.cs (새 파일)
+- backend/LlmSecurity.Api/Controllers/RuntimeDebugController.cs (새 파일)
+- backend/LlmSecurity.Api/appsettings.Development.json        (덮어쓰기)
+- scripts/debug-analyze-path.ps1                              (새 파일)
+- WEB_PLATFORM_SETUP.md                                       (새 파일)
+
+기존 frontend와 model_runtime 분석 코드는 변경하지 않습니다.
+
+적용 후 세 서버를 모두 재시작하세요.
